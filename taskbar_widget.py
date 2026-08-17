@@ -37,6 +37,7 @@ WPARAM = ctypes.c_size_t
 LPARAM = ctypes.c_ssize_t
 LRESULT = ctypes.c_ssize_t
 WNDPROC = ctypes.WINFUNCTYPE(LRESULT, HWND, UINT, WPARAM, LPARAM)
+WNDENUMPROC = ctypes.WINFUNCTYPE(BOOL, HWND, LPARAM)
 WINEVENTPROC = ctypes.WINFUNCTYPE(
     None,
     HANDLE,
@@ -100,6 +101,8 @@ DEFAULT_CHARSET = 1
 ANTIALIASED_QUALITY = 4
 COLORKEY_RGB = 0x00010101
 TASKBAR_RIGHT_RESERVE = 230
+TASKBAR_NOTIFICATION_CLASS = "TrayNotifyWnd"
+TASKBAR_NOTIFICATION_GAP = 12
 FULLSCREEN_TOLERANCE_PX = 2
 DATA_REFRESH_TIMER_ID = 1
 SHELL_SYNC_TIMER_ID = 2
@@ -123,6 +126,9 @@ u32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
 u32.FindWindowW.restype = HANDLE
 u32.GetWindowRect.argtypes = [HANDLE, ctypes.POINTER(wintypes.RECT)]
 u32.GetWindowRect.restype = BOOL
+if hasattr(u32, "EnumChildWindows"):
+    u32.EnumChildWindows.argtypes = [HWND, WNDENUMPROC, LPARAM]
+    u32.EnumChildWindows.restype = BOOL
 u32.GetClassNameW.argtypes = [HANDLE, ctypes.POINTER(ctypes.c_wchar), INT]
 u32.GetClassNameW.restype = INT
 u32.GetWindowThreadProcessId.argtypes = [HANDLE, ctypes.POINTER(DWORD)]
@@ -414,6 +420,7 @@ def _render_segments(
 def _taskbar_overlay_position(
     taskbar_bounds: tuple[int, int, int, int],
     configured_width: int,
+    notification_bounds: Optional[tuple[int, int, int, int]] = None,
 ) -> Optional[tuple[int, int, int, int]]:
     left, top, right, bottom = taskbar_bounds
     taskbar_width = right - left
@@ -422,7 +429,20 @@ def _taskbar_overlay_position(
         return None
     width = taskbar_overlay_width(configured_width, taskbar_width)
     if taskbar_width >= taskbar_height:
-        x = max(left, right - width - TASKBAR_RIGHT_RESERVE)
+        safe_right = right - TASKBAR_RIGHT_RESERVE
+        if notification_bounds is not None:
+            notification_left, notification_top, notification_right, notification_bottom = notification_bounds
+            overlaps_taskbar = notification_top < bottom and notification_bottom > top
+            inside_taskbar = (
+                left + TASKBAR_NOTIFICATION_GAP <= notification_left < right
+                and notification_left < notification_right
+            )
+            if overlaps_taskbar and inside_taskbar:
+                safe_right = notification_left - TASKBAR_NOTIFICATION_GAP
+        safe_right = min(right, safe_right)
+        available_width = max(1, safe_right - left)
+        width = min(width, available_width)
+        x = max(left, safe_right - width)
         return x, top, width, taskbar_height
     width = taskbar_width
     height = min(180, max(60, taskbar_height - 150))
@@ -518,6 +538,42 @@ def _window_class_name(hwnd: HWND) -> str:
     if not u32.GetClassNameW(hwnd, class_name, len(class_name)):
         return ""
     return class_name.value
+
+
+def _taskbar_notification_bounds(
+    taskbar: HWND,
+) -> Optional[tuple[int, int, int, int]]:
+    """Return the visible Explorer notification-area rectangle in screen space."""
+    enum_children = getattr(u32, "EnumChildWindows", None)
+    get_window_rect = getattr(u32, "GetWindowRect", None)
+    is_window_visible = getattr(u32, "IsWindowVisible", None)
+    if enum_children is None or get_window_rect is None:
+        return None
+
+    candidates: list[tuple[int, int, int, int]] = []
+
+    def collect(hwnd: HWND, _data: LPARAM) -> bool:
+        try:
+            if _window_class_name(hwnd) != TASKBAR_NOTIFICATION_CLASS:
+                return True
+            if is_window_visible is not None and not is_window_visible(hwnd):
+                return True
+            bounds = wintypes.RECT()
+            if not get_window_rect(hwnd, ctypes.byref(bounds)):
+                return True
+            if bounds.right <= bounds.left or bounds.bottom <= bounds.top:
+                return True
+            candidates.append((bounds.left, bounds.top, bounds.right, bounds.bottom))
+        except (AttributeError, OSError, TypeError):
+            return True
+        return True
+
+    callback = WNDENUMPROC(collect)
+    try:
+        enum_children(taskbar, callback, 0)
+    except (AttributeError, OSError, TypeError):
+        return None
+    return max(candidates, key=lambda bounds: bounds[0], default=None)
 
 
 def _window_process_name(hwnd: HWND) -> str:
