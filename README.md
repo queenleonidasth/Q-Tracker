@@ -113,7 +113,7 @@ dist\Q-Tracker\Q-Tracker.exe
 
 **taskbar ไม่ปรากฏหลัง Explorer restart/เปลี่ยนจอ**
 
-Exit จาก tray แล้วเปิด `run.bat` ใหม่ ตัว widget รองรับ display/DPI/taskbar setting change และคำนวณตำแหน่งจาก client area ของ taskbar ใหม่อัตโนมัติ
+Exit จาก tray แล้วเปิด `run.bat` ใหม่ ตัว widget รองรับ display/DPI/taskbar setting change และคำนวณตำแหน่งจาก client area ของ taskbar ใหม่อัตโนมัติ โดยอ่านขอบเขต notification area แบบ dynamic เพื่อไม่บังลูกศรหรือไอคอน และใช้ตำแหน่งสำรองชั่วคราวระหว่าง Explorer จัด layout ใหม่
 
 **การแสดงผลเมื่อเปิดหน้าต่างเต็มจอ**
 

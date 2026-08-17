@@ -139,6 +139,9 @@ u32.GetParent.argtypes = [HANDLE]
 u32.GetParent.restype = HANDLE
 u32.GetClientRect.argtypes = [HANDLE, ctypes.POINTER(wintypes.RECT)]
 u32.GetClientRect.restype = BOOL
+if hasattr(u32, "ScreenToClient"):
+    u32.ScreenToClient.argtypes = [HWND, ctypes.POINTER(wintypes.POINT)]
+    u32.ScreenToClient.restype = BOOL
 u32.RegisterClassExW.argtypes = [ctypes.c_void_p]
 u32.RegisterClassExW.restype = ATOM
 u32.CreateWindowExW.argtypes = [DWORD, ctypes.c_wchar_p, ctypes.c_wchar_p, DWORD, INT, INT, INT, INT, HANDLE, HANDLE, HANDLE, ctypes.c_void_p]
@@ -449,6 +452,28 @@ def _taskbar_overlay_position(
     return left, bottom - height - 100, width, height
 
 
+def _taskbar_notification_client_bounds(
+    taskbar: HWND,
+    screen_bounds: tuple[int, int, int, int],
+) -> Optional[tuple[int, int, int, int]]:
+    """Convert a notification-area rectangle from screen to taskbar space."""
+    screen_to_client = getattr(u32, "ScreenToClient", None)
+    if screen_to_client is None:
+        return None
+    top_left = wintypes.POINT(screen_bounds[0], screen_bounds[1])
+    bottom_right = wintypes.POINT(screen_bounds[2], screen_bounds[3])
+    try:
+        if not screen_to_client(taskbar, ctypes.byref(top_left)):
+            return None
+        if not screen_to_client(taskbar, ctypes.byref(bottom_right)):
+            return None
+    except (AttributeError, OSError, TypeError):
+        return None
+    if bottom_right.x <= top_left.x or bottom_right.y <= top_left.y:
+        return None
+    return top_left.x, top_left.y, bottom_right.x, bottom_right.y
+
+
 def _taskbar_child_position(
     taskbar: HWND,
     configured_width: int,
@@ -457,7 +482,8 @@ def _taskbar_child_position(
 
     A child window must be positioned in its parent's client space.  Using
     the current taskbar client size also keeps the 230 px right anchor stable
-    when the display resolution or taskbar DPI changes.
+    when the display resolution or taskbar DPI changes. The notification-area
+    boundary is converted into the same client coordinate space before use.
     """
     get_client_rect = getattr(u32, "GetClientRect", None)
     if get_client_rect is None:
@@ -472,14 +498,16 @@ def _taskbar_child_position(
     taskbar_height = client.bottom - client.top
     if taskbar_width <= 0 or taskbar_height <= 0:
         return None
+    notification_bounds = None
     if taskbar_width >= taskbar_height:
-        width = taskbar_overlay_width(configured_width, taskbar_width)
-        x = max(0, taskbar_width - width - TASKBAR_RIGHT_RESERVE)
-        return x, 0, width, taskbar_height
-    width = taskbar_width
-    height = min(180, max(60, taskbar_height - 150))
-    y = max(0, taskbar_height - height - 100)
-    return 0, y, width, height
+        screen_bounds = _taskbar_notification_bounds(taskbar)
+        if screen_bounds is not None:
+            notification_bounds = _taskbar_notification_client_bounds(taskbar, screen_bounds)
+    return _taskbar_overlay_position(
+        (client.left, client.top, client.right, client.bottom),
+        configured_width,
+        notification_bounds,
+    )
 
 
 def _rect_covers_monitor(

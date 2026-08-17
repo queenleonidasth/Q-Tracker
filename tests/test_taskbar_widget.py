@@ -262,6 +262,47 @@ def test_reposition_uses_current_taskbar_client_size_after_resolution_change(mon
     ]
 
 
+def test_reposition_uses_dynamic_notification_boundary_in_client_coordinates(monkeypatch):
+    """Screen-space tray bounds must become a safe client-space position."""
+    runtime = _runtime(_view("test"))
+    runtime.settings.display = {"width": 460}
+    set_position_calls = []
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            FindWindowW=lambda *_: 99,
+            GetClientRect=_rect_reader((0, 0, 1920, 48)),
+            GetWindowRect=_rect_reader((1000, 1032, 2920, 1080)),
+            ScreenToClient=lambda _h, point: (
+                setattr(point._obj, "x", point._obj.x - 1000)
+                or setattr(point._obj, "y", point._obj.y - 1032)
+                or 1
+            ),
+            SetWindowPos=lambda *args: set_position_calls.append(args) or 1,
+        ),
+    )
+    monkeypatch.setattr(
+        widget,
+        "_taskbar_notification_bounds",
+        lambda _taskbar: (2569, 1032, 2920, 1080),
+    )
+
+    assert widget._reposition(100) is True
+    assert set_position_calls == [
+        (
+            100,
+            None,
+            1157,
+            0,
+            400,
+            48,
+            widget.SWP_NOZORDER | widget.SWP_NOACTIVATE,
+        )
+    ]
+
+
 def test_maximized_work_area_does_not_cover_monitor():
     """A maximized app that leaves the taskbar visible must keep Q-Tracker visible."""
     assert widget._rect_covers_monitor(
