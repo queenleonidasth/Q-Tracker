@@ -20,11 +20,11 @@ The active window hierarchy confirms that Explorer exposes the notification area
 6. If the dynamic boundary leaves less room than the requested overlay width, clamp the overlay width to the available space so it cannot cross into the notification area. Normal displays retain the existing effective 400 x 48 size.
 7. Preserve the existing vertical-taskbar behavior, transparent rendering, z-order repair, fullscreen policy, and taskbar-relative client-coordinate conversion.
 
-The pure geometry helper will accept an optional notification-area rectangle so the placement policy can be tested without Win32 calls. The Win32 discovery helper will be defensive: missing APIs, transient Explorer handles, invalid rectangles, and callback errors return `None` and use the fallback path.
+The pure geometry helper will accept an optional notification-area rectangle in the same coordinate space as the taskbar rectangle so the placement policy can be tested without Win32 calls. `TrayNotifyWnd` is discovered in screen coordinates and converted into `Shell_TrayWnd` client coordinates with `ScreenToClient` before the helper is called. The Win32 discovery and conversion helpers will be defensive: missing APIs, transient Explorer handles, invalid rectangles, and callback errors return `None` and use the fallback path.
 
 ## Data flow
 
-`_reposition` → `_taskbar_child_position` → `TrayNotifyWnd` discovery → pure horizontal geometry calculation → `SetWindowPos` in `Shell_TrayWnd` client coordinates.
+`_reposition` → `_taskbar_child_position` → `TrayNotifyWnd` discovery in screen coordinates → `ScreenToClient` conversion → pure horizontal geometry calculation in client coordinates → `SetWindowPos`.
 
 The discovery runs only when geometry is recalculated. It does not change quota refresh cadence or add a new timer.
 
@@ -41,4 +41,3 @@ The discovery runs only when geometry is recalculated. It does not change quota 
 ## Scope
 
 This change affects only taskbar overlay geometry and its regression tests. It does not alter quota data, text content, settings schema, taskbar auto-hide, multi-taskbar support, or click handling inside the widget.
-
