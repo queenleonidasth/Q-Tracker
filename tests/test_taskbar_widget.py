@@ -127,6 +127,15 @@ def test_horizontal_position_keeps_fixed_reserve_without_notification_area():
     ) == (1290, 1032, 400, 48)
 
 
+def test_horizontal_position_ignores_notification_area_outside_taskbar():
+    """A rectangle extending beyond the taskbar cannot override the fallback."""
+    assert widget._taskbar_overlay_position(
+        (0, 1032, 1920, 1080),
+        460,
+        (1500, 1032, 2500, 1080),
+    ) == (1290, 1032, 400, 48)
+
+
 def test_notification_area_bounds_discovers_visible_tray_notify_window(monkeypatch):
     """The visible TrayNotifyWnd child supplies the tray boundary."""
     monkeypatch.setattr(

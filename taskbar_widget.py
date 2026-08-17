@@ -438,6 +438,7 @@ def _taskbar_overlay_position(
             overlaps_taskbar = notification_top < bottom and notification_bottom > top
             inside_taskbar = (
                 left + TASKBAR_NOTIFICATION_GAP <= notification_left < right
+                and notification_right <= right
                 and notification_left < notification_right
             )
             if overlaps_taskbar and inside_taskbar:
