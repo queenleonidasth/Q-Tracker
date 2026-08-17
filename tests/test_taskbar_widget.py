@@ -98,6 +98,83 @@ def test_horizontal_position_keeps_230_pixel_right_reserve():
     )
 
 
+def test_horizontal_position_uses_notification_area_boundary():
+    """A discovered notification area defines the safe right edge."""
+    assert widget._taskbar_overlay_position(
+        (0, 1392, 3440, 1440),
+        460,
+        (3169, 1392, 3440, 1440),
+    ) == (2757, 1392, 400, 48)
+
+
+def test_horizontal_position_clamps_width_before_narrow_notification_area():
+    """A narrow band shrinks the child instead of crossing the tray."""
+    position = widget._taskbar_overlay_position(
+        (0, 1392, 600, 1440),
+        460,
+        (300, 1392, 600, 1440),
+    )
+
+    assert position == (0, 1392, 288, 48)
+
+
+def test_horizontal_position_keeps_fixed_reserve_without_notification_area():
+    """Explorer transitions retain the deterministic fallback."""
+    assert widget._taskbar_overlay_position(
+        (0, 1032, 1920, 1080),
+        460,
+        None,
+    ) == (1290, 1032, 400, 48)
+
+
+def test_notification_area_bounds_discovers_visible_tray_notify_window(monkeypatch):
+    """The visible TrayNotifyWnd child supplies the tray boundary."""
+    monkeypatch.setattr(
+        widget,
+        "_window_class_name",
+        lambda hwnd: {
+            11: "TrayNotifyWnd",
+            12: "OtherTaskbarChild",
+        }[hwnd],
+    )
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            EnumChildWindows=lambda _parent, callback, _data: (
+                callback(12, 0),
+                callback(11, 0),
+                True,
+            )[-1],
+            IsWindowVisible=lambda hwnd: hwnd == 11,
+            GetWindowRect=_rect_reader((3169, 1392, 3440, 1440)),
+        ),
+    )
+
+    assert widget._taskbar_notification_bounds(99) == (
+        3169,
+        1392,
+        3440,
+        1440,
+    )
+
+
+def test_notification_area_bounds_ignores_invalid_geometry(monkeypatch):
+    """A zero-sized child cannot move the widget unsafely."""
+    monkeypatch.setattr(widget, "_window_class_name", lambda _hwnd: "TrayNotifyWnd")
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            EnumChildWindows=lambda _parent, callback, _data: callback(11, 0),
+            IsWindowVisible=lambda _hwnd: True,
+            GetWindowRect=_rect_reader((0, 0, 0, 0)),
+        ),
+    )
+
+    assert widget._taskbar_notification_bounds(99) is None
+
+
 def test_taskbar_position_rejects_zero_sized_bounds():
     """Transient Explorer geometry must not collapse or move the overlay."""
     assert widget._taskbar_overlay_position((0, 0, 0, 0), 400) is None
