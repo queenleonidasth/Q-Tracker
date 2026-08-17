@@ -4,7 +4,7 @@
 
 **Goal:** Position Q-Tracker immediately to the left of the actual Windows notification area so the system-tray expand arrow and icons remain clickable, while preserving a safe fallback during Explorer transitions.
 
-**Architecture:** Discover the visible TrayNotifyWnd descendant of Shell_TrayWnd with EnumChildWindows and GetWindowRect. Convert its validated screen rectangle into Shell_TrayWnd client coordinates with ScreenToClient, then feed it into the existing pure geometry calculation with a 12-pixel hit-test gap and the existing 230-pixel reserve when discovery fails. Pass the resulting client rectangle directly to SetWindowPos.
+**Architecture:** Discover the visible TrayNotifyWnd descendant of Shell_TrayWnd with EnumChildWindows and GetWindowRect. Convert its validated screen rectangle into Shell_TrayWnd client coordinates with ScreenToClient, then feed it into the existing pure geometry calculation with a DPI-scaled one-taskbar-slot gap and the existing 230-pixel reserve when discovery fails. Pass the resulting client rectangle directly to SetWindowPos.
 
 **Tech Stack:** Python 3.13, ctypes Win32 User32 APIs, pytest, PyInstaller.
 
@@ -12,7 +12,7 @@
 
 - Keep the effective normal horizontal overlay size at 400 x 48 pixels.
 - Keep 230 pixels as the fallback right reserve when no valid notification area is available.
-- Keep a 12-pixel gap between the overlay and the discovered notification area.
+- Keep a gap of `max(12, taskbar_height)` between the overlay and the discovered notification area so Windows 11 XAML controls cannot overhang into the widget.
 - Keep Q-Tracker as a child of Shell_TrayWnd; do not change ownership, z-order, timers, fullscreen behavior, or rendering.
 - Only clamp width when the dynamic boundary leaves less room than the requested overlay width.
 - Preserve the existing vertical-taskbar fallback behavior.
@@ -38,7 +38,7 @@ Add these tests after the existing fixed-reserve geometry test:
             (0, 1392, 3440, 1440),
             460,
             (3169, 1392, 3440, 1440),
-        ) == (2757, 1392, 400, 48)
+        ) == (2721, 1392, 400, 48)
 
 
     def test_horizontal_position_clamps_width_before_narrow_notification_area():
@@ -49,7 +49,7 @@ Add these tests after the existing fixed-reserve geometry test:
             (300, 1392, 600, 1440),
         )
 
-        assert position == (0, 1392, 288, 48)
+        assert position == (0, 1392, 252, 48)
 
 
     def test_horizontal_position_keeps_fixed_reserve_without_notification_area():
@@ -181,7 +181,7 @@ Place this near _window_class_name:
 
 - [ ] Step 3: Extend the pure geometry helper
 
-Change the signature to accept notification_bounds=None. For horizontal taskbars, keep the fixed reserve as fallback, validate that the notification rectangle is inside the taskbar span and vertically overlaps it, then use notification_left minus TASKBAR_NOTIFICATION_GAP as the safe right edge. Clamp the normal width to available space:
+Change the signature to accept notification_bounds=None. For horizontal taskbars, keep the fixed reserve as fallback, validate that the notification rectangle is inside the taskbar span and vertically overlaps it, then subtract `max(TASKBAR_NOTIFICATION_GAP, taskbar_height)` from notification_left. Clamp the normal width to available space:
 
     def _taskbar_overlay_position(
         taskbar_bounds: tuple[int, int, int, int],
@@ -196,15 +196,17 @@ Change the signature to accept notification_bounds=None. For horizontal taskbars
         width = taskbar_overlay_width(configured_width, taskbar_width)
         if taskbar_width >= taskbar_height:
             safe_right = right - TASKBAR_RIGHT_RESERVE
+            notification_gap = max(TASKBAR_NOTIFICATION_GAP, taskbar_height)
             if notification_bounds is not None:
                 notification_left, notification_top, notification_right, notification_bottom = notification_bounds
                 overlaps_taskbar = notification_top < bottom and notification_bottom > top
                 inside_taskbar = (
-                    left < notification_left < right
+                    left + notification_gap <= notification_left < right
+                    and notification_right <= right
                     and notification_left < notification_right
                 )
                 if overlaps_taskbar and inside_taskbar:
-                    safe_right = notification_left - TASKBAR_NOTIFICATION_GAP
+                    safe_right = notification_left - notification_gap
             safe_right = min(right, safe_right)
             available_width = max(1, safe_right - left)
             width = min(width, available_width)
@@ -271,7 +273,7 @@ Add:
             (
                 100,
                 None,
-                1157,
+                1121,
                 0,
                 400,
                 48,

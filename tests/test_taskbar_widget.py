@@ -98,13 +98,22 @@ def test_horizontal_position_keeps_230_pixel_right_reserve():
     )
 
 
-def test_horizontal_position_uses_notification_area_boundary():
-    """A discovered notification area defines the safe right edge."""
+def test_horizontal_position_reserves_taskbar_height_before_notification_area():
+    """One taskbar slot must protect XAML controls that overhang their HWND."""
     assert widget._taskbar_overlay_position(
         (0, 1392, 3440, 1440),
         460,
         (3169, 1392, 3440, 1440),
-    ) == (2757, 1392, 400, 48)
+    ) == (2721, 1392, 400, 48)
+
+
+def test_horizontal_position_scales_notification_gap_with_taskbar_height():
+    """A taller DPI-scaled taskbar must receive a proportionally larger gap."""
+    assert widget._taskbar_overlay_position(
+        (0, 1376, 2560, 1440),
+        460,
+        (2200, 1376, 2560, 1440),
+    ) == (1736, 1376, 400, 64)
 
 
 def test_horizontal_position_clamps_width_before_narrow_notification_area():
@@ -115,7 +124,7 @@ def test_horizontal_position_clamps_width_before_narrow_notification_area():
         (300, 1392, 600, 1440),
     )
 
-    assert position == (0, 1392, 288, 48)
+    assert position == (0, 1392, 252, 48)
 
 
 def test_horizontal_position_keeps_fixed_reserve_without_notification_area():
@@ -272,7 +281,7 @@ def test_reposition_uses_current_taskbar_client_size_after_resolution_change(mon
 
 
 def test_reposition_uses_dynamic_notification_boundary_in_client_coordinates(monkeypatch):
-    """Screen-space tray bounds must become a safe client-space position."""
+    """Screen-space tray bounds must keep one safe slot in client space."""
     runtime = _runtime(_view("test"))
     runtime.settings.display = {"width": 460}
     set_position_calls = []
@@ -303,7 +312,7 @@ def test_reposition_uses_dynamic_notification_boundary_in_client_coordinates(mon
         (
             100,
             None,
-            1157,
+            1121,
             0,
             400,
             48,

@@ -433,16 +433,17 @@ def _taskbar_overlay_position(
     width = taskbar_overlay_width(configured_width, taskbar_width)
     if taskbar_width >= taskbar_height:
         safe_right = right - TASKBAR_RIGHT_RESERVE
+        notification_gap = max(TASKBAR_NOTIFICATION_GAP, taskbar_height)
         if notification_bounds is not None:
             notification_left, notification_top, notification_right, notification_bottom = notification_bounds
             overlaps_taskbar = notification_top < bottom and notification_bottom > top
             inside_taskbar = (
-                left + TASKBAR_NOTIFICATION_GAP <= notification_left < right
+                left + notification_gap <= notification_left < right
                 and notification_right <= right
                 and notification_left < notification_right
             )
             if overlaps_taskbar and inside_taskbar:
-                safe_right = notification_left - TASKBAR_NOTIFICATION_GAP
+                safe_right = notification_left - notification_gap
         safe_right = min(right, safe_right)
         available_width = max(1, safe_right - left)
         width = min(width, available_width)
