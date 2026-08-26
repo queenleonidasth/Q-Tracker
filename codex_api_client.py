@@ -166,6 +166,14 @@ def _classify_window(window: dict) -> Optional[str]:
         return "session"
     if seconds == CODEX_WEEKLY_WINDOW_SECONDS:
         return "weekly"
+    # Plans may report a non-standard session length (e.g. 14400s); any window
+    # shorter than a day is a rolling session quota, anything beyond six days
+    # is the weekly bucket. Unknown mid-range durations stay unclassified so
+    # positional fallback can decide.
+    if 0 < seconds < 86_400:
+        return "session"
+    if seconds >= 6 * 86_400:
+        return "weekly"
     return None
 
 

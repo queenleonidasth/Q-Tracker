@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
@@ -60,23 +62,33 @@ class TrackerView:
 
 def taskbar_overlay_width(configured_width: int, taskbar_width: int) -> int:
     """Resolve a compact horizontal overlay width within available taskbar space."""
-    return min(configured_width, 400, max(240, taskbar_width - 300))
+    return min(configured_width, 480, max(240, taskbar_width - 300))
 
 
-def taskbar_windows(provider: ProviderView) -> tuple[WindowView, ...]:
+def taskbar_windows(
+    provider: ProviderView,
+    preferred_ids: Optional[Iterable[str]] = None,
+) -> tuple[WindowView, ...]:
     """Return only quota windows requested for the native taskbar overlay."""
     by_id = {window.window_id: window for window in provider.windows}
+
+    def pick(ids: Iterable[str]) -> tuple[WindowView, ...]:
+        return tuple(by_id[window_id] for window_id in ids if window_id in by_id)
+
+    preferred = tuple(str(window_id) for window_id in preferred_ids) if preferred_ids else ()
+    if preferred:
+        selected = pick(preferred)
+        if selected:
+            return selected
     if provider.provider_id == "agy":
-        return tuple(
-            by_id[window_id]
-            for window_id in ("session", "weekly")
-            if window_id in by_id
-        )
+        local_ids = ("session", "weekly")
+        if any(window_id in by_id for window_id in local_ids):
+            return pick(local_ids)
+        return pick(("gemini", "3p"))
     if provider.provider_id == "codex":
-        for window_id in ("weekly", "session"):
-            if window_id in by_id:
-                return (by_id[window_id],)
-        return provider.windows[:1]
+        return pick(("session", "weekly")) or provider.windows[:1]
+    if provider.provider_id == "gemini":
+        return pick(("pro", "flash", "flash_lite"))
     return ()
 
 
@@ -163,17 +175,26 @@ def format_tokens(value: Any) -> str:
 
 
 def _window_order(window_id: str) -> tuple[int, str]:
-    preferred = {"session": 0, "weekly": 1, "monthly": 2, "code_review": 3}
+    preferred = {"session": 0, "weekly": 1, "monthly": 2, "code_review": 3, "pro": 4, "flash": 5, "flash_lite": 6}
     return preferred.get(window_id, 10), window_id
 
 
 def _short_label(window_id: str, label: str) -> str:
     if window_id == "session":
+        text = str(label or "").strip()
+        if re.fullmatch(r"\d+[HhMm]", text):
+            return text
         return "5H"
     if window_id == "weekly":
         return "W"
     if window_id == "monthly":
         return "M"
+    if window_id == "pro":
+        return "Pro"
+    if window_id == "flash":
+        return "Flash"
+    if window_id == "flash_lite":
+        return "Lite"
     return label or window_id.replace("_", " ").title()
 
 
@@ -182,6 +203,14 @@ def _float(value: Any, fallback: float = 0.0) -> float:
         return max(0.0, min(100.0, float(value)))
     except (TypeError, ValueError):
         return fallback
+
+
+def countdown_suffix(reset_in: Any) -> str:
+    """Compact ``·1h57m`` token for surfaces that show a reset time."""
+    text = str(reset_in or "").strip()
+    if not text or text in {"-", "—"}:
+        return ""
+    return f"·{text.replace(' ', '')}"
 
 
 def build_provider_view(snapshot: dict[str, Any], now: Optional[datetime] = None) -> ProviderView:
@@ -219,9 +248,14 @@ def build_provider_view(snapshot: dict[str, Any], now: Optional[datetime] = None
 
     prefix = display_name + (f" {indicator}" if indicator else "")
     if windows:
-        details = " · ".join(
-            f"{window.remaining_percent:.1f}% {window.short_label}" for window in windows
-        )
+        parts: list[str] = []
+        for window in windows:
+            part = f"{window.remaining_percent:.1f}% {window.short_label}"
+            suffix = countdown_suffix(window.reset_in)
+            if suffix:
+                part += f" {suffix}"
+            parts.append(part)
+        details = " · ".join(parts)
     else:
         details = "—"
     observed_at = snapshot.get("observed_at") or snapshot.get("fetched_at")
@@ -253,7 +287,7 @@ def _period_total(period: Any) -> int:
 
 def build_tracker_view(
     state: dict[str, Any],
-    provider_order: Iterable[str] = ("agy", "codex"),
+    provider_order: Iterable[str] = ("agy", "codex", "gemini"),
     now: Optional[datetime] = None,
 ) -> TrackerView:
     reference = now or datetime.now().astimezone()

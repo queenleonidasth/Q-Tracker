@@ -80,7 +80,7 @@ def test_settings_recovers_invalid_json_with_safe_defaults(tmp_path):
     settings = Settings.load(path)
 
     assert settings.refresh_interval_seconds == 60
-    assert settings.enabled_providers == ("agy", "codex")
+    assert settings.enabled_providers == ("agy", "codex", "gemini")
     assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
 
 
@@ -106,6 +106,32 @@ def test_settings_accepts_legacy_display_and_provider_shape(tmp_path):
     assert settings.display["width"] == 480
     assert settings.provider_styles["agy"]["color"] == "#123456"
     assert settings.provider_styles["codex"]["icon"] == "C"
+
+
+def test_settings_validate_taskbar_window_map(tmp_path):
+    """Only known providers and window ids may steer the taskbar selection."""
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "display": {
+                    "taskbar_windows": {
+                        "codex": ["weekly"],
+                        "agy": ["bogus"],
+                        "gemini": [],
+                        "unknown_provider": ["session"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings.load(path)
+
+    assert settings.display["taskbar_windows"] == {"codex": ("weekly",)}
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["display"]["taskbar_windows"] == {"codex": ["weekly"]}
 
 
 def test_snapshot_default_timestamp_is_timezone_aware():

@@ -91,9 +91,9 @@ def test_right_aligned_start_falls_back_to_left_margin_for_overflow():
 def test_horizontal_position_keeps_230_pixel_right_reserve():
     """A geometry refresh must preserve the user's current taskbar-relative anchor."""
     assert widget._taskbar_overlay_position((0, 1032, 1920, 1080), 460) == (
-        1290,
+        1230,
         1032,
-        400,
+        460,
         48,
     )
 
@@ -104,7 +104,7 @@ def test_horizontal_position_reserves_taskbar_height_before_notification_area():
         (0, 1392, 3440, 1440),
         460,
         (3169, 1392, 3440, 1440),
-    ) == (2721, 1392, 400, 48)
+    ) == (2661, 1392, 460, 48)
 
 
 def test_horizontal_position_scales_notification_gap_with_taskbar_height():
@@ -113,7 +113,7 @@ def test_horizontal_position_scales_notification_gap_with_taskbar_height():
         (0, 1376, 2560, 1440),
         460,
         (2200, 1376, 2560, 1440),
-    ) == (1736, 1376, 400, 64)
+    ) == (1676, 1376, 460, 64)
 
 
 def test_horizontal_position_clamps_width_before_narrow_notification_area():
@@ -133,7 +133,7 @@ def test_horizontal_position_keeps_fixed_reserve_without_notification_area():
         (0, 1032, 1920, 1080),
         460,
         None,
-    ) == (1290, 1032, 400, 48)
+    ) == (1230, 1032, 460, 48)
 
 
 def test_horizontal_position_ignores_notification_area_outside_taskbar():
@@ -142,7 +142,7 @@ def test_horizontal_position_ignores_notification_area_outside_taskbar():
         (0, 1032, 1920, 1080),
         460,
         (1500, 1032, 2500, 1080),
-    ) == (1290, 1032, 400, 48)
+    ) == (1230, 1032, 460, 48)
 
 
 def test_notification_area_bounds_discovers_visible_tray_notify_window(monkeypatch):
@@ -202,7 +202,13 @@ def test_reposition_skips_unchanged_valid_position(monkeypatch):
     """Repeated display notifications must not move an already-correct overlay."""
     runtime = _runtime(_view("test"))
     runtime.settings.display = {"width": 460}
-    runtime.last_position = (1290, 0, 400, 48)
+    runtime.last_position = (1230, 0, 460, 48)
+
+    monkeypatch.setattr(
+        widget,
+        "_content_width",
+        lambda include_countdown=True: 436,
+    )
     set_position_calls = []
     monkeypatch.setattr(widget, "_runtime", runtime)
     monkeypatch.setattr(
@@ -223,6 +229,12 @@ def test_reposition_uses_taskbar_client_coordinates(monkeypatch):
     """A taskbar child must be positioned relative to its Explorer parent."""
     runtime = _runtime(_view("test"))
     runtime.settings.display = {"width": 460}
+
+    monkeypatch.setattr(
+        widget,
+        "_content_width",
+        lambda include_countdown=True: 436,
+    )
     set_position_calls = []
     monkeypatch.setattr(widget, "_runtime", runtime)
     monkeypatch.setattr(
@@ -240,9 +252,9 @@ def test_reposition_uses_taskbar_client_coordinates(monkeypatch):
         (
             100,
             None,
-            1290,
+            1230,
             0,
-            400,
+            460,
             48,
             widget.SWP_NOZORDER | widget.SWP_NOACTIVATE,
         )
@@ -253,6 +265,12 @@ def test_reposition_uses_current_taskbar_client_size_after_resolution_change(mon
     """A child position must follow Explorer's current client size, not stale screen bounds."""
     runtime = _runtime(_view("test"))
     runtime.settings.display = {"width": 460}
+
+    monkeypatch.setattr(
+        widget,
+        "_content_width",
+        lambda include_countdown=True: 436,
+    )
     set_position_calls = []
     monkeypatch.setattr(widget, "_runtime", runtime)
     monkeypatch.setattr(
@@ -271,9 +289,9 @@ def test_reposition_uses_current_taskbar_client_size_after_resolution_change(mon
         (
             100,
             None,
-            1930,
+            1870,
             0,
-            400,
+            460,
             64,
             widget.SWP_NOZORDER | widget.SWP_NOACTIVATE,
         )
@@ -284,6 +302,12 @@ def test_reposition_uses_dynamic_notification_boundary_in_client_coordinates(mon
     """Screen-space tray bounds must keep one safe slot in client space."""
     runtime = _runtime(_view("test"))
     runtime.settings.display = {"width": 460}
+
+    monkeypatch.setattr(
+        widget,
+        "_content_width",
+        lambda include_countdown=True: 436,
+    )
     set_position_calls = []
     monkeypatch.setattr(widget, "_runtime", runtime)
     monkeypatch.setattr(
@@ -312,9 +336,9 @@ def test_reposition_uses_dynamic_notification_boundary_in_client_coordinates(mon
         (
             100,
             None,
-            1121,
+            1061,
             0,
-            400,
+            460,
             48,
             widget.SWP_NOZORDER | widget.SWP_NOACTIVATE,
         )
@@ -748,6 +772,153 @@ def test_render_segments_include_waiting_text_without_providers():
     assert segments[0].gap_after == 0
 
 
+def test_render_segments_show_reset_countdown_for_each_quota():
+    """Each taskbar quota must carry its own time-to-reset next to the percentage."""
+    view = TrackerView(
+        providers=(
+            _provider(
+                "agy",
+                "Antigravity",
+                (
+                    WindowView(
+                        "session", "5H", "5H", 91.0, 9.0,
+                        "2026-08-22T14:09:17Z", "1h 57m", "normal",
+                    ),
+                    WindowView(
+                        "weekly", "W", "W", 94.0, 6.0,
+                        "2026-08-26T11:22:25Z", "3d 23h", "normal",
+                    ),
+                ),
+            ),
+        ),
+        compact_text="",
+        token_totals={},
+    )
+
+    segments = widget._render_segments(view, {"agy": {"color": "#35C2FF"}})
+
+    assert [segment.text for segment in segments] == [
+        "Antigravity",
+        "91%",
+        "5H",
+        "·1h57m",
+        "·",
+        "94%",
+        "W",
+        "·3d23h",
+    ]
+    assert segments[1].text == "91%"
+    assert segments[-1].gap_after == 0
+
+
+def test_render_segments_can_omit_reset_countdowns():
+    """Compact mode must drop countdowns so quotas still fit narrow overlays."""
+    view = TrackerView(
+        providers=(
+            _provider(
+                "agy",
+                "Antigravity",
+                (
+                    WindowView(
+                        "session", "5H", "5H", 91.0, 9.0,
+                        "2026-08-22T14:09:17Z", "1h 57m", "normal",
+                    ),
+                ),
+            ),
+        ),
+        compact_text="",
+        token_totals={},
+    )
+
+    segments = widget._render_segments(
+        view, {"agy": {"color": "#35C2FF"}}, include_countdown=False
+    )
+
+    assert [segment.text for segment in segments] == ["Antigravity", "91%", "5H"]
+
+
+def test_overlay_position_shrinks_to_desired_content_width():
+    """The overlay must hug its content instead of reserving a fixed 460 px."""
+    assert widget._taskbar_overlay_position(
+        (0, 1032, 1920, 1080),
+        460,
+        desired_width=300,
+    ) == (1390, 1032, 300, 48)
+
+
+def test_overlay_position_clamps_desired_width_and_keeps_floor():
+    """Desired width grows up to the auto-size ceiling but never below the floor."""
+    assert widget._taskbar_overlay_position(
+        (0, 1032, 1920, 1080),
+        460,
+        desired_width=5_000,
+    ) == (970, 1032, 720, 48)
+    assert widget._taskbar_overlay_position(
+        (0, 1032, 1920, 1080),
+        460,
+        desired_width=100,
+    ) == (1450, 1032, 240, 48)
+    narrow = widget._taskbar_overlay_position(
+        (0, 1032, 800, 1080),
+        460,
+        desired_width=5_000,
+    )
+
+    assert narrow[2] == min(720, 500)
+
+
+def test_reposition_flags_compact_when_content_exceeds_space(monkeypatch):
+    """Countdowns drop to compact mode only when the full text cannot fit."""
+    runtime = _runtime(_view("test"))
+    runtime.settings.display = {"width": 460}
+    set_position_calls = []
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    monkeypatch.setattr(
+        widget,
+        "_content_width",
+        lambda include_countdown=True: 900 if include_countdown else 300,
+    )
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            FindWindowW=lambda *_: 99,
+            GetWindowRect=_rect_reader((0, 1032, 1920, 1080)),
+            SetWindowPos=lambda *args: set_position_calls.append(args) or 1,
+        ),
+    )
+
+    assert widget._reposition(100) is True
+    assert runtime.compact_countdowns is True
+    assert set_position_calls[0][2:6] == (970, 0, 720, 48)
+
+
+def test_reposition_keeps_full_mode_when_content_fits(monkeypatch):
+    """Fitting content must keep countdowns visible and size the window to it."""
+    runtime = _runtime(_view("test"))
+    runtime.settings.display = {"width": 460}
+    set_position_calls = []
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    monkeypatch.setattr(
+        widget,
+        "_content_width",
+        lambda include_countdown=True: 436,
+    )
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            FindWindowW=lambda *_: 99,
+            GetWindowRect=_rect_reader((0, 1032, 1920, 1080)),
+            SetWindowPos=lambda *args: set_position_calls.append(args) or 1,
+        ),
+    )
+
+    assert widget._reposition(100) is True
+    assert runtime.compact_countdowns is False
+    assert set_position_calls[0][2:6] == (1230, 0, 460, 48)
+
+
 def test_shell_timer_rechecks_geometry_without_moving_unchanged_window(monkeypatch):
     """Shell checks may recalculate geometry but must not move an unchanged child."""
     current = _view("same")
@@ -1044,6 +1215,70 @@ def test_create_window_stops_when_taskbar_owner_is_missing(monkeypatch):
     assert create_calls == []
 
 
+def _codex_view_with_both_windows() -> TrackerView:
+    session = WindowView("session", "5H", "5H", 90.0, 10.0, None, "2h 30m", "normal")
+    weekly = WindowView("weekly", "Weekly", "W", 80.0, 20.0, None, "6d 2h", "normal")
+    provider = _provider("codex", "Codex", (session, weekly))
+    return TrackerView(
+        providers=(provider,),
+        compact_text="",
+        token_totals={},
+    )
+
+
+def test_render_segments_include_both_codex_windows():
+    """The native overlay must render the 5-hour quota next to the weekly one."""
+    view = TrackerView(
+        providers=(
+            _provider(
+                "codex",
+                "Codex",
+                (
+                    _window("session", "5H", 90),
+                    _window("weekly", "W", 80),
+                ),
+            ),
+        ),
+        compact_text="",
+        token_totals={},
+    )
+
+    segments = widget._render_segments(view, {"codex": {"color": "#7FE36A"}})
+    texts = "".join(segment.text for segment in segments)
+
+    assert "Codex" in texts
+    assert "90%" in texts and "5H" in texts
+    assert "80%" in texts and "W" in texts
+
+
+def test_compact_mode_drops_countdowns_before_dropping_codex_windows():
+    """Space pressure removes countdown suffixes first, never a whole window."""
+    view = _codex_view_with_both_windows()
+
+    full = widget._render_segments(view, {}, include_countdown=True)
+    compact = widget._render_segments(view, {}, include_countdown=False)
+
+    full_texts = "".join(segment.text for segment in full)
+    compact_texts = "".join(segment.text for segment in compact)
+    assert "·2h30m" in full_texts and "·6d2h" in full_texts
+    for label in ("90%", "5H", "80%", "W"):
+        assert label in compact_texts
+    assert "·2h30m" not in compact_texts and "·6d2h" not in compact_texts
+
+
+def test_render_segments_honors_configured_window_map():
+    """Settings-driven selection must reach the native overlay renderer."""
+    segments = widget._render_segments(
+        _codex_view_with_both_windows(),
+        {},
+        taskbar_window_map={"codex": ("weekly",)},
+    )
+    texts = "".join(segment.text for segment in segments)
+
+    assert "80%" in texts and "W" in texts
+    assert "90%" not in texts and "5H" not in texts
+
+
 def test_create_window_registers_data_and_shell_timers(monkeypatch):
     """Creation must schedule fast shell checks separately from data refreshes."""
     timer_calls = []
@@ -1131,6 +1366,12 @@ def test_reposition_ignores_zero_dimensions(monkeypatch):
     """Repositioning must not collapse the window if taskbar has not finished layout."""
     set_position_calls = []
     monkeypatch.setattr(widget, "_runtime", _runtime(_view("test")))
+
+    monkeypatch.setattr(
+        widget,
+        "_content_width",
+        lambda include_countdown=True: 0,
+    )
     monkeypatch.setattr(
         widget,
         "u32",

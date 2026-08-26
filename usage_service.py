@@ -17,7 +17,7 @@ from quota_models import (
     apply_monotonic_guard,
     utc_now_iso,
 )
-from quota_sources import AgyQuotaSource, CodexQuotaSource
+from quota_sources import AgyQuotaSource, CodexQuotaSource, GeminiQuotaSource
 from state_store import AtomicStateStore, get_store
 
 
@@ -340,7 +340,11 @@ def get_service() -> UsageService:
     if _service is None:
         _service = UsageService(
             get_store(),
-            {"agy": AgyQuotaSource(), "codex": CodexQuotaSource()},
+            {
+                "agy": AgyQuotaSource(),
+                "codex": CodexQuotaSource(),
+                "gemini": GeminiQuotaSource(),
+            },
             scanner=CodexUsageScanner(),
         )
     return _service

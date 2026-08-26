@@ -13,7 +13,12 @@ from typing import Any
 DEFAULT_PROVIDER_STYLES = {
     "agy": {"display_name": "Antigravity", "color": "#4FC3F7", "icon": "A"},
     "codex": {"display_name": "Codex", "color": "#81C784", "icon": "C"},
+    "gemini": {"display_name": "Gemini", "color": "#FFB74D", "icon": "G"},
 }
+
+TASKBAR_WINDOW_IDS = frozenset(
+    {"session", "weekly", "monthly", "code_review", "pro", "flash", "flash_lite"}
+)
 
 DEFAULT_DISPLAY = {
     "font_size": 18,
@@ -22,6 +27,7 @@ DEFAULT_DISPLAY = {
     "width": 460,
     "update_interval_ms": 1_000,
     "show_percent_left": True,
+    "taskbar_windows": {},
 }
 
 
@@ -120,6 +126,22 @@ class Settings:
         )
         display["show_percent_left"] = bool(display.get("show_percent_left", True))
 
+        raw_taskbar_windows = display.get("taskbar_windows")
+        clean_taskbar_windows: dict[str, tuple[str, ...]] = {}
+        if isinstance(raw_taskbar_windows, dict):
+            for provider_id, window_ids in raw_taskbar_windows.items():
+                normalized_provider = str(provider_id).strip().lower()
+                if normalized_provider not in styles or not isinstance(window_ids, (list, tuple)):
+                    continue
+                sequence = tuple(
+                    window_id
+                    for window_id in (str(value).strip().lower() for value in window_ids)
+                    if window_id in TASKBAR_WINDOW_IDS
+                )
+                if sequence:
+                    clean_taskbar_windows[normalized_provider] = sequence
+        display["taskbar_windows"] = clean_taskbar_windows
+
         settings = cls(
             refresh_interval_seconds=refresh,
             notification_thresholds=tuple(sorted(thresholds, reverse=True)),
@@ -133,7 +155,9 @@ class Settings:
 
     def to_dict(self) -> dict[str, Any]:
         providers = {
-            ("AGY" if provider_id == "agy" else "Codex"): {
+            {"agy": "AGY", "codex": "Codex", "gemini": "Gemini"}.get(
+                provider_id, provider_id.title()
+            ): {
                 key: value
                 for key, value in style.items()
                 if key in {"color", "icon", "display_name"}

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from quota_models import FetchStatus
 from quota_models import ProviderErrorKind, ProviderFetchError
-from quota_sources import AgyQuotaSource, CodexQuotaSource
+from quota_sources import AgyQuotaSource, CodexQuotaSource, GeminiQuotaSource
 
 
 NOW = datetime(2026, 8, 10, 10, 0, tzinfo=timezone.utc)
@@ -212,6 +212,7 @@ def test_agy_old_cache_is_stale_and_uses_cache_observation_time(tmp_path):
 
     snapshot = AgyQuotaSource(
         fetch_live=lambda: None,
+        fetch_cloud=lambda: None,
         cache_path=cache_path,
         stale_seconds=300,
         now=lambda: NOW,
@@ -228,6 +229,7 @@ def test_agy_missing_cache_and_live_process_is_unavailable(tmp_path):
     """AGY being closed is an expected unavailable state, not a fake empty plan."""
     snapshot = AgyQuotaSource(
         fetch_live=lambda: None,
+        fetch_cloud=lambda: None,
         cache_path=tmp_path / "missing.json",
         now=lambda: NOW,
     ).fetch()
@@ -235,3 +237,166 @@ def test_agy_missing_cache_and_live_process_is_unavailable(tmp_path):
     assert snapshot.status is FetchStatus.UNAVAILABLE
     assert snapshot.windows == {}
     assert "not running" in snapshot.message.lower()
+
+
+def test_agy_cloud_fallback_works_without_running_process(tmp_path):
+    """The stored-OAuth cloud API must satisfy quota even when agy.exe is closed."""
+    cloud = {
+        "plan_tier": "?",
+        "groups": {
+            "gemini": {
+                "remaining_percent": 98.6,
+                "remaining_fraction": 0.986,
+                "reset_time": "2026-08-22T14:09:17Z",
+                "label": "Gemini",
+            },
+            "3p": {
+                "remaining_percent": 100.0,
+                "remaining_fraction": 1.0,
+                "reset_time": "2026-08-22T16:36:57Z",
+                "label": "Claude & GPT",
+            },
+        },
+    }
+    snapshot = AgyQuotaSource(
+        fetch_live=lambda: None,
+        fetch_cloud=lambda: cloud,
+        cache_path=tmp_path / "missing.json",
+        now=lambda: NOW,
+    ).fetch()
+
+    assert snapshot.status is FetchStatus.OK
+    assert snapshot.source == "cloud_api"
+    assert snapshot.windows["gemini"].remaining_percent == 98.6
+    assert snapshot.windows["gemini"].label == "Gemini"
+    assert snapshot.windows["3p"].remaining_percent == 100.0
+    assert snapshot.windows["3p"].label == "Claude & GPT"
+
+
+def test_agy_prefers_cloud_data_over_stale_cache(tmp_path):
+    """A stale cache must lose against a successful cloud fetch."""
+    cache_path = tmp_path / "agy.json"
+    cache_path.write_text(
+        json.dumps(
+            {
+                "groups": {
+                    "gemini-weekly": {
+                        "remaining_percent": 10,
+                        "remaining_fraction": 0.1,
+                        "reset_time": "2026-08-15T00:00:00Z",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    old_time = (NOW - timedelta(hours=5)).timestamp()
+    os.utime(cache_path, (old_time, old_time))
+    cloud = {
+        "groups": {
+            "gemini": {
+                "remaining_percent": 55.0,
+                "remaining_fraction": 0.55,
+                "reset_time": "2026-08-10T15:00:00Z",
+            }
+        }
+    }
+
+    snapshot = AgyQuotaSource(
+        fetch_live=lambda: None,
+        fetch_cloud=lambda: cloud,
+        cache_path=cache_path,
+        stale_seconds=300,
+        now=lambda: NOW,
+    ).fetch()
+
+    assert snapshot.status is FetchStatus.OK
+    assert snapshot.source == "cloud_api"
+    assert snapshot.windows["gemini"].remaining_percent == 55.0
+
+
+def test_gemini_live_models_map_to_per_family_windows(tmp_path):
+    """Per-model families must stay distinct windows, not merge into session/weekly."""
+    live = {
+        "plan_type": "Paid",
+        "timestamp": "2026-08-10T10:00:00Z",
+        "models": {
+            "pro": {
+                "used_percent": 20.0,
+                "percent_left": 80.0,
+                "remaining_fraction": 0.8,
+                "resets_at": 1_786_800_000,
+                "model_id": "gemini-2.5-pro",
+            },
+            "flash": {
+                "used_percent": 50.0,
+                "percent_left": 50.0,
+                "remaining_fraction": 0.5,
+                "resets_at": 1_786_800_000,
+                "model_id": "gemini-2.5-flash",
+            },
+        },
+    }
+    snapshot = GeminiQuotaSource(
+        fetch_live=lambda: live,
+        now=lambda: NOW,
+    ).fetch()
+
+    assert snapshot.status is FetchStatus.OK
+    assert snapshot.source == "live_api"
+    assert snapshot.plan_type == "Paid"
+    assert set(snapshot.windows) == {"pro", "flash"}
+    assert snapshot.windows["pro"].remaining_percent == 80
+    assert snapshot.windows["flash"].remaining_percent == 50
+    assert snapshot.windows["pro"].label == "Gemini Pro"
+
+
+def test_gemini_without_live_data_is_unavailable_with_auth_hint(tmp_path):
+    """Missing credentials must not render as a healthy 100-percent quota."""
+    def missing_credentials():
+        raise ProviderFetchError(
+            ProviderErrorKind.AUTH_REQUIRED,
+            "Gemini authentication is unavailable; run 'gemini' and sign in once",
+        )
+
+    snapshot = GeminiQuotaSource(
+        fetch_live=missing_credentials,
+        now=lambda: NOW,
+    ).fetch()
+
+    assert snapshot.status is FetchStatus.UNAVAILABLE
+    assert snapshot.windows == {}
+    assert snapshot.error_kind == ProviderErrorKind.AUTH_REQUIRED.value
+
+
+def test_gemini_rate_limited_preserves_status_and_error_kind(tmp_path):
+    def rate_limited():
+        raise ProviderFetchError(ProviderErrorKind.RATE_LIMITED, "Too many requests")
+
+    snapshot = GeminiQuotaSource(
+        fetch_live=rate_limited,
+        now=lambda: NOW,
+    ).fetch()
+
+    assert snapshot.status is FetchStatus.RATE_LIMITED
+    assert snapshot.windows == {}
+    assert snapshot.error_kind == ProviderErrorKind.RATE_LIMITED.value
+
+
+def test_codex_source_labels_session_by_real_duration(tmp_path):
+    """The 5-hour quota label must follow the duration the backend reports."""
+    raw = {
+        "used_percent": 12.0,
+        "percent_left": 88.0,
+        "window_minutes": 240,
+        "resets_at": 1_786_350_000,
+        "plan_type": "chatgpt",
+    }
+    snapshot = CodexQuotaSource(fetch_live=lambda: raw, codex_home=tmp_path, now=lambda: NOW).fetch()
+
+    assert snapshot.windows["session"].label == "4H"
+
+    odd = dict(raw, window_minutes=75)
+    snapshot = CodexQuotaSource(fetch_live=lambda: odd, codex_home=tmp_path, now=lambda: NOW).fetch()
+
+    assert snapshot.windows["session"].label == "75m"

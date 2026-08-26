@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import agy_api_client
+import agy_cloud_client
 import codex_api_client
+import gemini_api_client
 from quota_models import (
     FetchStatus,
     ProviderErrorKind,
@@ -73,6 +75,17 @@ def _window_from_used(
         label=label,
         window_minutes=minutes,
     )
+
+
+def _window_label(window_id: str, minutes: Optional[int]) -> str:
+    """Derive a human label from the real window duration, e.g. ``4H``/``75m``."""
+    if window_id == "weekly":
+        return "Weekly"
+    if minutes and minutes > 0:
+        if minutes % 60 == 0:
+            return f"{minutes // 60}H"
+        return f"{minutes}m"
+    return "5H"
 
 
 class CodexQuotaSource:
@@ -168,7 +181,7 @@ class CodexQuotaSource:
         for value, position in candidates:
             minutes = int(value.get("window_minutes") or (300 if position == "primary" else 10_080))
             window_id = "weekly" if minutes >= 10_000 else "session"
-            label = "Weekly" if window_id == "weekly" else "5H"
+            label = _window_label(window_id, minutes)
             windows[window_id] = _window_from_used(
                 window_id,
                 label,
@@ -224,7 +237,7 @@ class CodexQuotaSource:
             window_id = "weekly" if minutes >= 10_000 else "session"
             windows[window_id] = _window_from_used(
                 window_id,
-                "Weekly" if window_id == "weekly" else "5H",
+                _window_label(window_id, minutes),
                 value.get("used_percent"),
                 minutes,
                 value.get("resets_at") or value.get("reset_at"),
@@ -273,17 +286,19 @@ class CodexQuotaSource:
 
 
 class AgyQuotaSource:
-    """Read AGY quota from a running local language server or its last-good cache."""
+    """Read AGY quota from the local language server, the cloud API, or cache."""
 
     def __init__(
         self,
         cache_path: Optional[Path] = None,
         fetch_live: Optional[Callable[[], Optional[dict[str, Any]]]] = None,
+        fetch_cloud: Optional[Callable[[], Optional[dict[str, Any]]]] = None,
         stale_seconds: int = DEFAULT_STALE_SECONDS,
         now: Callable[[], datetime] = _utc_now,
     ):
         self.cache_path = Path(cache_path) if cache_path is not None else AGY_QUOTA_CACHE
         self.fetch_live = fetch_live or agy_api_client.fetch_from_running_agy
+        self.fetch_cloud = fetch_cloud or agy_cloud_client.fetch_from_cloud
         self.stale_seconds = max(0, int(stale_seconds))
         self.now = now
 
@@ -295,12 +310,20 @@ class AgyQuotaSource:
         if isinstance(live, dict):
             return self._from_groups(live, FetchStatus.OK, "local_api", self.now())
 
+        try:
+            cloud = self.fetch_cloud()
+        except Exception:
+            cloud = None
+        if isinstance(cloud, dict):
+            return self._from_groups(cloud, FetchStatus.OK, "cloud_api", self.now())
+
         if not self.cache_path.exists():
             return ProviderSnapshot.failure(
                 "agy",
                 "Antigravity",
                 FetchStatus.UNAVAILABLE,
-                "Antigravity is not running and no quota cache exists.",
+                "Antigravity is not running, the cloud API returned no data, "
+                "and no quota cache exists.",
                 error_kind=ProviderErrorKind.NOT_RUNNING.value,
             )
         try:
@@ -347,7 +370,11 @@ class AgyQuotaSource:
                 window_id, label, minutes = "weekly", "Gemini Weekly", 10_080
             else:
                 window_id = re.sub(r"[^a-z0-9]+", "_", lower).strip("_") or "quota"
-                label = str(group_name).replace("-", " ").title()
+                explicit_label = str(group.get("label") or "").strip()
+                label = (
+                    explicit_label
+                    or str(group_name).replace("-", " ").title()
+                )
                 minutes = 300 if "5h" in lower or "hour" in lower else 10_080 if "week" in lower else None
             remaining = group.get("remaining_percent")
             if remaining is None and group.get("remainingFraction") is not None:
@@ -387,4 +414,94 @@ class AgyQuotaSource:
             refreshed_at=_iso(now),
             plan_type=str(raw.get("plan_tier") or "unknown"),
             message="Using the last Antigravity cache" if status is FetchStatus.STALE else "",
+        )
+
+
+class GeminiQuotaSource:
+    """Fetch Gemini CLI quota live via the Cloud AI Companion API (no CLI spawned)."""
+
+    FAMILY_LABELS = {
+        "pro": "Gemini Pro",
+        "flash": "Gemini Flash",
+        "flash_lite": "Gemini Flash-Lite",
+    }
+
+    def __init__(
+        self,
+        fetch_live: Optional[Callable[[], Optional[dict[str, Any]]]] = None,
+        now: Callable[[], datetime] = _utc_now,
+    ):
+        self.fetch_live = fetch_live or gemini_api_client.fetch_gemini_live_limits
+        self.now = now
+
+    def fetch(self) -> ProviderSnapshot:
+        fetch_error: Optional[ProviderFetchError] = None
+        try:
+            live = self.fetch_live()
+        except ProviderFetchError as error:
+            fetch_error = error
+            live = None
+        except Exception as error:
+            fetch_error = ProviderFetchError(ProviderErrorKind.OTHER, str(error))
+            live = None
+
+        if live:
+            snapshot = self._from_live(live)
+            if snapshot is not None:
+                return snapshot
+
+        if fetch_error is not None:
+            return ProviderSnapshot.failure(
+                "gemini",
+                "Gemini",
+                self._status_for_error(fetch_error),
+                str(fetch_error),
+                error_kind=fetch_error.kind.value,
+            )
+        return ProviderSnapshot.failure(
+            "gemini",
+            "Gemini",
+            FetchStatus.UNAVAILABLE,
+            "No Gemini quota data is available; sign in to the Gemini CLI once.",
+            error_kind=ProviderErrorKind.AUTH_REQUIRED.value,
+        )
+
+    @staticmethod
+    def _status_for_error(error: ProviderFetchError) -> FetchStatus:
+        if error.kind == ProviderErrorKind.RATE_LIMITED:
+            return FetchStatus.RATE_LIMITED
+        if error.kind in {
+            ProviderErrorKind.AUTH_REQUIRED,
+            ProviderErrorKind.NOT_INSTALLED,
+            ProviderErrorKind.NOT_RUNNING,
+        }:
+            return FetchStatus.UNAVAILABLE
+        return FetchStatus.ERROR
+
+    def _from_live(self, raw: dict[str, Any]) -> Optional[ProviderSnapshot]:
+        models = raw.get("models") if isinstance(raw.get("models"), dict) else {}
+        now = self.now().astimezone(timezone.utc)
+        windows: dict[str, QuotaWindow] = {}
+        for family, value in models.items():
+            if not isinstance(value, dict) or value.get("used_percent") is None:
+                continue
+            windows[str(family)] = _window_from_used(
+                str(family),
+                self.FAMILY_LABELS.get(str(family), str(family).replace("_", " ").title()),
+                value.get("used_percent"),
+                None,
+                value.get("resets_at") or value.get("reset_time"),
+                now,
+            )
+        if not windows:
+            return None
+        return ProviderSnapshot(
+            provider_id="gemini",
+            provider_name="Gemini",
+            windows=windows,
+            status=FetchStatus.OK,
+            source="live_api",
+            observed_at=str(raw.get("timestamp") or _iso(now)),
+            refreshed_at=_iso(now),
+            plan_type=str(raw.get("plan_type") or "unknown"),
         )

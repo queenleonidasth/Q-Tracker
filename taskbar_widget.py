@@ -18,6 +18,7 @@ from ui_models import (
     TrackerView,
     build_tracker_view,
     context_detail_lines,
+    countdown_suffix,
     taskbar_overlay_width,
     taskbar_windows,
 )
@@ -104,6 +105,8 @@ TASKBAR_RIGHT_RESERVE = 230
 TASKBAR_NOTIFICATION_CLASS = "TrayNotifyWnd"
 TASKBAR_NOTIFICATION_GAP = 12
 FULLSCREEN_TOLERANCE_PX = 2
+MAX_AUTO_WIDTH = 720
+MIN_AUTO_WIDTH = 240
 DATA_REFRESH_TIMER_ID = 1
 SHELL_SYNC_TIMER_ID = 2
 SHELL_SYNC_INTERVAL_MS = 10
@@ -225,6 +228,10 @@ g32.GetTextExtentPoint32W.argtypes = [HDC, ctypes.c_wchar_p, INT, ctypes.POINTER
 g32.GetTextExtentPoint32W.restype = BOOL
 g32.CreateCompatibleDC.argtypes = [HDC]
 g32.CreateCompatibleDC.restype = HDC
+u32.GetDC.argtypes = [HWND]
+u32.GetDC.restype = HDC
+u32.ReleaseDC.argtypes = [HWND, HDC]
+u32.ReleaseDC.restype = INT
 g32.CreateCompatibleBitmap.argtypes = [HDC, INT, INT]
 g32.CreateCompatibleBitmap.restype = HANDLE
 g32.BitBlt.argtypes = [HDC, INT, INT, INT, INT, HDC, INT, INT, DWORD]
@@ -316,6 +323,7 @@ class _Runtime:
     ticks: int = 0
     last_position: Optional[tuple[int, int, int, int]] = None
     overlay_hidden: bool = False
+    compact_countdowns: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,7 +373,10 @@ def _right_aligned_start(client_width: int, content_width: int) -> int:
 def _render_segments(
     view: TrackerView,
     provider_styles: dict[str, dict[str, object]],
+    include_countdown: bool = True,
+    taskbar_window_map: Optional[dict[str, tuple[str, ...]]] = None,
 ) -> tuple[RenderSegment, ...]:
+    window_map = taskbar_window_map or {}
     if not view.providers:
         return (RenderSegment("Q-Tracker — waiting for data", rgb((170, 178, 195))),)
 
@@ -384,7 +395,7 @@ def _render_segments(
             indicator_color = "#FFB454" if provider.status == "stale" else "#FF6B6B"
             segments.append(RenderSegment(provider.indicator, rgb(indicator_color), 5))
 
-        windows = taskbar_windows(provider)
+        windows = taskbar_windows(provider, preferred_ids=window_map.get(provider.provider_id))
         if not windows:
             segments.append(
                 RenderSegment(
@@ -405,14 +416,19 @@ def _render_segments(
             segments.append(
                 RenderSegment(f"{window.remaining_percent:.0f}%", rgb(quota_color), 4)
             )
-            label_gap = 5 if has_next_window else 10 if has_next_provider else 0
+            tail_gap = 5 if has_next_window else 10 if has_next_provider else 0
+            countdown = countdown_suffix(window.reset_in) if include_countdown else ""
             segments.append(
                 RenderSegment(
                     window.short_label,
                     rgb((125, 132, 150)),
-                    label_gap,
+                    3 if countdown else tail_gap,
                 )
             )
+            if countdown:
+                segments.append(
+                    RenderSegment(countdown, rgb((110, 118, 138)), tail_gap)
+                )
             if has_next_window:
                 segments.append(RenderSegment("·", rgb((125, 132, 150)), 5))
         if has_next_provider:
@@ -424,6 +440,7 @@ def _taskbar_overlay_position(
     taskbar_bounds: tuple[int, int, int, int],
     configured_width: int,
     notification_bounds: Optional[tuple[int, int, int, int]] = None,
+    desired_width: Optional[int] = None,
 ) -> Optional[tuple[int, int, int, int]]:
     left, top, right, bottom = taskbar_bounds
     taskbar_width = right - left
@@ -431,6 +448,9 @@ def _taskbar_overlay_position(
     if taskbar_width <= 0 or taskbar_height <= 0:
         return None
     width = taskbar_overlay_width(configured_width, taskbar_width)
+    if desired_width is not None and desired_width > 0:
+        ceiling = min(MAX_AUTO_WIDTH, max(taskbar_width - 300, MIN_AUTO_WIDTH))
+        width = max(MIN_AUTO_WIDTH, min(int(desired_width), ceiling))
     if taskbar_width >= taskbar_height:
         safe_right = right - TASKBAR_RIGHT_RESERVE
         notification_gap = max(TASKBAR_NOTIFICATION_GAP, taskbar_height)
@@ -479,6 +499,7 @@ def _taskbar_notification_client_bounds(
 def _taskbar_child_position(
     taskbar: HWND,
     configured_width: int,
+    desired_width: Optional[int] = None,
 ) -> Optional[tuple[int, int, int, int]]:
     """Return geometry in ``Shell_TrayWnd`` client coordinates.
 
@@ -509,6 +530,7 @@ def _taskbar_child_position(
         (client.left, client.top, client.right, client.bottom),
         configured_width,
         notification_bounds,
+        desired_width,
     )
 
 
@@ -806,23 +828,30 @@ def _sync_overlay_visibility(hwnd: HWND) -> None:
 def _reposition(hwnd: HWND) -> bool:
     if _runtime is None or not hwnd:
         return False
-    taskbar = u32.FindWindowW("Shell_TrayWnd", None)
+    find_window = getattr(u32, "FindWindowW", None)
+    if find_window is None:
+        return False
+    taskbar = find_window("Shell_TrayWnd", None)
     if not taskbar:
         return False
     display = getattr(_runtime.settings, "display", {}) or {}
     configured_width = int(display.get("width", 460))
-    position = _taskbar_child_position(taskbar, configured_width)
+    full_needed = _content_width(include_countdown=True) + _CONTENT_MARGINS_PX
+    position = _taskbar_child_position(taskbar, configured_width, desired_width=full_needed)
     if position is None:
         bounds = wintypes.RECT()
         get_window_rect = getattr(u32, "GetWindowRect", None)
         if get_window_rect is None or not get_window_rect(taskbar, ctypes.byref(bounds)):
             return False
         taskbar_bounds = (bounds.left, bounds.top, bounds.right, bounds.bottom)
-        screen_position = _taskbar_overlay_position(taskbar_bounds, configured_width)
+        screen_position = _taskbar_overlay_position(
+            taskbar_bounds, configured_width, desired_width=full_needed
+        )
         if screen_position is None:
             return False
         x, y, width, height = screen_position
         position = (x - bounds.left, y - bounds.top, width, height)
+    _runtime.compact_countdowns = position[2] + 4 < full_needed
     if _runtime.last_position == position:
         return True
     x, y, width, height = position
@@ -845,6 +874,49 @@ def _measure_text(hdc: HDC, text: str) -> int:
     size = wintypes.SIZE()
     g32.GetTextExtentPoint32W(hdc, text, len(text), ctypes.byref(size))
     return size.cx
+
+
+_CONTENT_MARGINS_PX = 24
+
+
+def _taskbar_window_map() -> dict[str, tuple[str, ...]]:
+    """Read validated per-provider taskbar window preferences from settings."""
+    if _runtime is None:
+        return {}
+    display = getattr(_runtime.settings, "display", {}) or {}
+    mapping = display.get("taskbar_windows")
+    return mapping if isinstance(mapping, dict) else {}
+
+
+def _content_width(include_countdown: bool = True) -> int:
+    """Measure the rendered segment width with the active font (0 when no view)."""
+    if _runtime is None:
+        return 0
+    hdc = u32.GetDC(None)
+    if not hdc:
+        return 0
+    try:
+        display = getattr(_runtime.settings, "display", {}) or {}
+        font = _font_cache.get(
+            str(display.get("font_name", "Segoe UI Variable Display")),
+            int(display.get("font_size", 18)),
+        )
+        old_font = g32.SelectObject(hdc, font)
+        try:
+            segments = _render_segments(
+                _runtime.view,
+                getattr(_runtime.settings, "provider_styles", {}),
+                include_countdown=include_countdown,
+                taskbar_window_map=_taskbar_window_map(),
+            )
+            return sum(
+                _measure_text(hdc, segment.text) + segment.gap_after
+                for segment in segments
+            )
+        finally:
+            g32.SelectObject(hdc, old_font)
+    finally:
+        u32.ReleaseDC(None, hdc)
 
 
 def _draw_text(hdc: HDC, text: str, x: int, height: int) -> None:
@@ -875,7 +947,12 @@ def _paint(hwnd: HWND) -> None:
     )
     old_font = g32.SelectObject(memory_dc, font)
 
-    segments = _render_segments(_runtime.view, _runtime.settings.provider_styles)
+    segments = _render_segments(
+        _runtime.view,
+        _runtime.settings.provider_styles,
+        include_countdown=not _runtime.compact_countdowns,
+        taskbar_window_map=_taskbar_window_map(),
+    )
     measured = tuple(
         (segment, _measure_text(memory_dc, segment.text))
         for segment in segments
@@ -952,6 +1029,7 @@ def _wnd_proc(hwnd: HWND, message: int, wparam: int, lparam: int) -> int:
                 )
                 if view.fingerprint != _runtime.view.fingerprint:
                     _runtime.view = view
+                    _reposition(hwnd)
                     u32.InvalidateRect(hwnd, None, 0)
                 return 0
             return u32.DefWindowProcW(hwnd, message, wparam, lparam)

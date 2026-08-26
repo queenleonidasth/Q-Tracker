@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from ui_models import (
+    _short_label,
     build_provider_view,
     build_tracker_view,
     context_detail_lines,
@@ -55,7 +56,7 @@ def test_error_last_good_values_keep_numbers_with_error_indicator():
         NOW,
     )
 
-    assert view.compact_text == "Codex ! 42.0% 5H"
+    assert view.compact_text == "Codex ! 42.0% 5H ·2h30m"
     assert view.message == "Timed out"
 
 
@@ -82,7 +83,9 @@ def test_window_order_and_colors_are_based_on_remaining_quota():
 
     assert [window.window_id for window in view.windows] == ["session", "weekly", "code_review"]
     assert [window.severity for window in view.windows] == ["warning", "critical", "normal"]
-    assert view.compact_text == "Codex 19.0% 5H · 8.0% W · 75.0% Review"
+    assert view.compact_text == (
+        "Codex 19.0% 5H ·2h30m · 8.0% W ·2h30m · 75.0% Review ·2h30m"
+    )
 
 
 def test_taskbar_windows_select_only_agy_session_and_weekly():
@@ -105,14 +108,44 @@ def test_taskbar_windows_select_only_agy_session_and_weekly():
     assert [window.window_id for window in provider.windows] == ["session", "weekly", "3p_weekly"]
 
 
-def test_taskbar_windows_select_only_codex_weekly():
-    """A Codex session window must not displace its requested weekly taskbar quota."""
+def test_taskbar_windows_fall_back_to_cloud_family_ids():
+    """Cloud-sourced AGY snapshots (gemini/3p) must still reach the native taskbar."""
+    provider = build_provider_view(
+        _provider(
+            provider_id="agy",
+            display_name="Antigravity",
+            windows={"gemini": _window("Gemini", 97.6), "3p": _window("Claude & GPT", 100)},
+        ),
+        NOW,
+    )
+
+    assert [window.window_id for window in taskbar_windows(provider)] == ["gemini", "3p"]
+
+
+def test_taskbar_windows_select_codex_session_then_weekly():
+    """The Codex 5-hour quota must be visible alongside the weekly window."""
     provider = build_provider_view(
         _provider(windows={"session": _window("5H", 90), "weekly": _window("Weekly", 80)}),
         NOW,
     )
 
+    assert [window.window_id for window in taskbar_windows(provider)] == ["session", "weekly"]
+    assert [window.short_label for window in taskbar_windows(provider)] == ["5H", "W"]
+
+
+def test_taskbar_windows_select_codex_weekly_when_session_missing():
+    """Snapshots that only expose the weekly window still reach the taskbar."""
+    provider = build_provider_view(_provider(windows={"weekly": _window("Weekly", 80)}), NOW)
+
     assert [window.window_id for window in taskbar_windows(provider)] == ["weekly"]
+
+
+def test_short_label_prefers_hour_label_reported_by_source():
+    """A 4-hour plan must read 4H on the taskbar instead of a hard-coded 5H."""
+    assert _short_label("session", "4H") == "4H"
+    assert _short_label("session", "75m") == "75m"
+    assert _short_label("session", "") == "5H"
+    assert _short_label("session", "Weekly-ish") == "5H"
 
 
 def test_taskbar_windows_fall_back_for_codex_without_weekly():
@@ -124,10 +157,27 @@ def test_taskbar_windows_fall_back_for_codex_without_weekly():
     assert [window.window_id for window in taskbar_windows(extra)] == ["monthly"]
 
 
+def test_taskbar_windows_honors_preferred_ids():
+    """Configured preferences must restore a weekly-only Codex taskbar if wanted."""
+    provider = build_provider_view(
+        _provider(windows={"session": _window("5H", 90), "weekly": _window("Weekly", 80)}),
+        NOW,
+    )
+
+    preferred = taskbar_windows(provider, preferred_ids=("weekly",))
+    unmatched = taskbar_windows(provider, preferred_ids=("code_review",))
+    empty = taskbar_windows(provider, preferred_ids=())
+
+    assert [window.window_id for window in preferred] == ["weekly"]
+    assert [window.window_id for window in unmatched] == ["session", "weekly"]
+    assert [window.window_id for window in empty] == ["session", "weekly"]
+
+
 def test_taskbar_overlay_width_caps_wide_configuration():
-    """A legacy 460 px setting must not expand the compact horizontal overlay."""
-    assert taskbar_overlay_width(configured_width=460, taskbar_width=1920) == 400
+    """The compact horizontal overlay stays within the configured width cap."""
+    assert taskbar_overlay_width(configured_width=460, taskbar_width=1920) == 460
     assert taskbar_overlay_width(configured_width=360, taskbar_width=1920) == 360
+    assert taskbar_overlay_width(configured_width=1_200, taskbar_width=1920) == 480
 
 
 def test_tracker_view_uses_configured_order_and_token_totals():
@@ -157,7 +207,7 @@ def test_tracker_view_uses_configured_order_and_token_totals():
     view = build_tracker_view(state, provider_order=("agy", "codex"), now=NOW)
 
     assert [provider.provider_id for provider in view.providers] == ["agy", "codex"]
-    assert view.compact_text == "Antigravity ! —  |  Codex 80.0% W"
+    assert view.compact_text == "Antigravity ! —  |  Codex 80.0% W ·2h30m"
     assert view.token_totals == {"today": 1_250, "month": 2_500, "lifetime": 12_500}
 
 
