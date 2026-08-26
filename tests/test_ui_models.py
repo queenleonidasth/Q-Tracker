@@ -148,6 +148,12 @@ def test_short_label_prefers_hour_label_reported_by_source():
     assert _short_label("session", "Weekly-ish") == "5H"
 
 
+def test_short_label_prefers_day_label_for_long_weekly_windows():
+    """A free-plan 30-day window must not masquerade as a weekly quota."""
+    assert _short_label("weekly", "30D") == "30D"
+    assert _short_label("weekly", "Weekly") == "W"
+
+
 def test_taskbar_windows_fall_back_for_codex_without_weekly():
     """Codex still shows useful quota when older snapshots lack a weekly window."""
     session = build_provider_view(_provider(windows={"session": _window("5H", 90)}), NOW)

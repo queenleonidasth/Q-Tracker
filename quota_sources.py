@@ -80,6 +80,9 @@ def _window_from_used(
 def _window_label(window_id: str, minutes: Optional[int]) -> str:
     """Derive a human label from the real window duration, e.g. ``4H``/``75m``."""
     if window_id == "weekly":
+        # Free plans report a single ~30-day window; do not call that "weekly".
+        if minutes and minutes > 10_080 and minutes % 1_440 == 0:
+            return f"{minutes // 1_440}D"
         return "Weekly"
     if minutes and minutes > 0:
         if minutes % 60 == 0:

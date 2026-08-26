@@ -186,6 +186,11 @@ def _short_label(window_id: str, label: str) -> str:
             return text
         return "5H"
     if window_id == "weekly":
+        text = str(label or "").strip()
+        if re.fullmatch(r"\d+[Dd]", text):
+            return text
+        return "W"
+    if window_id == "weekly":
         return "W"
     if window_id == "monthly":
         return "M"

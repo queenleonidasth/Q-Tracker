@@ -400,3 +400,17 @@ def test_codex_source_labels_session_by_real_duration(tmp_path):
     snapshot = CodexQuotaSource(fetch_live=lambda: odd, codex_home=tmp_path, now=lambda: NOW).fetch()
 
     assert snapshot.windows["session"].label == "75m"
+
+
+def test_codex_free_plan_monthly_window_is_not_labeled_weekly(tmp_path):
+    """A single 30-day window must report its real duration, not 'Weekly'."""
+    raw = {
+        "used_percent": 48.0,
+        "percent_left": 52.0,
+        "window_minutes": 43_200,
+        "resets_at": 1_789_895_397,
+        "plan_type": "chatgpt",
+    }
+    snapshot = CodexQuotaSource(fetch_live=lambda: raw, codex_home=tmp_path, now=lambda: NOW).fetch()
+
+    assert snapshot.windows["weekly"].label == "30D"
