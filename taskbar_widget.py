@@ -101,15 +101,18 @@ FW_BOLD = 700
 DEFAULT_CHARSET = 1
 ANTIALIASED_QUALITY = 4
 COLORKEY_RGB = 0x00010101
-TASKBAR_RIGHT_RESERVE = 230
 TASKBAR_NOTIFICATION_CLASS = "TrayNotifyWnd"
 TASKBAR_NOTIFICATION_GAP = 12
+TASKBAR_LEFT_MARGIN = 12
+TASKBAR_PRIMARY_GAP = 20
+TASKBAR_PRIMARY_CLASSES = frozenset({"Start", "MSTaskListWClass", "MSTaskSwWClass", "ReBarWindow32"})
 FULLSCREEN_TOLERANCE_PX = 2
 MAX_AUTO_WIDTH = 720
 MIN_AUTO_WIDTH = 240
 DATA_REFRESH_TIMER_ID = 1
 SHELL_SYNC_TIMER_ID = 2
 SHELL_SYNC_INTERVAL_MS = 10
+SHELL_RECONNECT_INTERVAL_MS = 2_000
 GW_HWNDPREV = 3
 HWND_TOPMOST = -1
 u32 = ctypes.windll.user32
@@ -140,6 +143,8 @@ u32.GetWindow.argtypes = [HANDLE, UINT]
 u32.GetWindow.restype = HANDLE
 u32.GetParent.argtypes = [HANDLE]
 u32.GetParent.restype = HANDLE
+u32.IsWindow.argtypes = [HANDLE]
+u32.IsWindow.restype = BOOL
 u32.GetClientRect.argtypes = [HANDLE, ctypes.POINTER(wintypes.RECT)]
 u32.GetClientRect.restype = BOOL
 if hasattr(u32, "ScreenToClient"):
@@ -324,6 +329,7 @@ class _Runtime:
     last_position: Optional[tuple[int, int, int, int]] = None
     overlay_hidden: bool = False
     compact_countdowns: bool = False
+    shutting_down: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,8 +372,11 @@ def request_close() -> None:
 
 
 
-def _right_aligned_start(client_width: int, content_width: int) -> int:
-    return max(10, client_width - content_width - 12)
+def _left_aligned_start(client_width: int, content_width: int) -> int:
+    """Keep taskbar text visually aligned to the left edge of its overlay."""
+    if client_width <= 0:
+        return 0
+    return min(TASKBAR_LEFT_MARGIN, max(0, client_width - max(0, content_width)))
 
 
 def _render_segments(
@@ -441,6 +450,7 @@ def _taskbar_overlay_position(
     configured_width: int,
     notification_bounds: Optional[tuple[int, int, int, int]] = None,
     desired_width: Optional[int] = None,
+    primary_bounds: Optional[tuple[int, int, int, int]] = None,
 ) -> Optional[tuple[int, int, int, int]]:
     left, top, right, bottom = taskbar_bounds
     taskbar_width = right - left
@@ -452,22 +462,41 @@ def _taskbar_overlay_position(
         ceiling = min(MAX_AUTO_WIDTH, max(taskbar_width - 300, MIN_AUTO_WIDTH))
         width = max(MIN_AUTO_WIDTH, min(int(desired_width), ceiling))
     if taskbar_width >= taskbar_height:
-        safe_right = right - TASKBAR_RIGHT_RESERVE
+        x = left + TASKBAR_LEFT_MARGIN
+        safe_right = right - TASKBAR_LEFT_MARGIN
         notification_gap = max(TASKBAR_NOTIFICATION_GAP, taskbar_height)
         if notification_bounds is not None:
             notification_left, notification_top, notification_right, notification_bottom = notification_bounds
             overlaps_taskbar = notification_top < bottom and notification_bottom > top
             inside_taskbar = (
-                left + notification_gap <= notification_left < right
+                x + notification_gap <= notification_left < right
                 and notification_right <= right
                 and notification_left < notification_right
             )
             if overlaps_taskbar and inside_taskbar:
                 safe_right = notification_left - notification_gap
-        safe_right = min(right, safe_right)
-        available_width = max(1, safe_right - left)
+
+        if primary_bounds is not None:
+            primary_left, primary_top, primary_right, primary_bottom = primary_bounds
+            overlaps_taskbar = primary_top < bottom and primary_bottom > top
+            inside_taskbar = (
+                left <= primary_left < right
+                and left < primary_right <= right
+                and primary_left < primary_right
+            )
+            if overlaps_taskbar and inside_taskbar:
+                left_region_right = primary_left - TASKBAR_PRIMARY_GAP
+                left_region_width = left_region_right - x
+                if left_region_width >= MIN_AUTO_WIDTH:
+                    safe_right = min(safe_right, left_region_right)
+                else:
+                    # Left-aligned Windows taskbars leave no useful room before
+                    # Start. Sit after the primary buttons in that layout.
+                    x = primary_right + TASKBAR_PRIMARY_GAP
+
+        safe_right = min(right - TASKBAR_LEFT_MARGIN, safe_right)
+        available_width = max(1, safe_right - x)
         width = min(width, available_width)
-        x = max(left, safe_right - width)
         return x, top, width, taskbar_height
     width = taskbar_width
     height = min(180, max(60, taskbar_height - 150))
@@ -496,6 +525,49 @@ def _taskbar_notification_client_bounds(
     return top_left.x, top_left.y, bottom_right.x, bottom_right.y
 
 
+def _taskbar_primary_controls_bounds(
+    taskbar: HWND,
+) -> Optional[tuple[int, int, int, int]]:
+    """Return the visible Start/task-button band in screen coordinates."""
+    enum_children = getattr(u32, "EnumChildWindows", None)
+    get_window_rect = getattr(u32, "GetWindowRect", None)
+    is_window_visible = getattr(u32, "IsWindowVisible", None)
+    if enum_children is None or get_window_rect is None:
+        return None
+
+    candidates: list[tuple[int, int, int, int]] = []
+
+    def collect(hwnd: HWND, _data: LPARAM) -> bool:
+        try:
+            if _window_class_name(hwnd) not in TASKBAR_PRIMARY_CLASSES:
+                return True
+            if is_window_visible is not None and not is_window_visible(hwnd):
+                return True
+            bounds = wintypes.RECT()
+            if not get_window_rect(hwnd, ctypes.byref(bounds)):
+                return True
+            if bounds.right <= bounds.left or bounds.bottom <= bounds.top:
+                return True
+            candidates.append((bounds.left, bounds.top, bounds.right, bounds.bottom))
+        except (AttributeError, OSError, TypeError):
+            return True
+        return True
+
+    callback = WNDENUMPROC(collect)
+    try:
+        enum_children(taskbar, callback, 0)
+    except (AttributeError, OSError, TypeError):
+        return None
+    if not candidates:
+        return None
+    return (
+        min(bounds[0] for bounds in candidates),
+        min(bounds[1] for bounds in candidates),
+        max(bounds[2] for bounds in candidates),
+        max(bounds[3] for bounds in candidates),
+    )
+
+
 def _taskbar_child_position(
     taskbar: HWND,
     configured_width: int,
@@ -522,15 +594,20 @@ def _taskbar_child_position(
     if taskbar_width <= 0 or taskbar_height <= 0:
         return None
     notification_bounds = None
+    primary_bounds = None
     if taskbar_width >= taskbar_height:
         screen_bounds = _taskbar_notification_bounds(taskbar)
         if screen_bounds is not None:
             notification_bounds = _taskbar_notification_client_bounds(taskbar, screen_bounds)
+        screen_bounds = _taskbar_primary_controls_bounds(taskbar)
+        if screen_bounds is not None:
+            primary_bounds = _taskbar_notification_client_bounds(taskbar, screen_bounds)
     return _taskbar_overlay_position(
         (client.left, client.top, client.right, client.bottom),
         configured_width,
         notification_bounds,
         desired_width,
+        primary_bounds,
     )
 
 
@@ -961,7 +1038,7 @@ def _paint(hwnd: HWND) -> None:
         text_width + segment.gap_after
         for segment, text_width in measured
     )
-    x = _right_aligned_start(width, content_width)
+    x = _left_aligned_start(width, content_width)
     for segment, text_width in measured:
         g32.SetTextColor(memory_dc, segment.color)
         _draw_text(memory_dc, segment.text, x, height)
@@ -1048,6 +1125,7 @@ def _wnd_proc(hwnd: HWND, message: int, wparam: int, lparam: int) -> int:
             _show_menu(hwnd)
             return 0
         if message == WM_CLOSE:
+            _runtime.shutting_down = True
             _uninstall_shell_event_hook()
             u32.KillTimer(hwnd, DATA_REFRESH_TIMER_ID)
             u32.KillTimer(hwnd, SHELL_SYNC_TIMER_ID)
@@ -1056,7 +1134,10 @@ def _wnd_proc(hwnd: HWND, message: int, wparam: int, lparam: int) -> int:
         if message == WM_DESTROY:
             _uninstall_shell_event_hook()
             _font_cache.cleanup()
-            u32.PostQuitMessage(0)
+            if _runtime.hwnd == hwnd:
+                _runtime.hwnd = None
+            if _runtime.shutting_down:
+                u32.PostQuitMessage(0)
             return 0
     except Exception:
         # UI callback failures must not tear down Explorer's taskbar overlay.
@@ -1161,6 +1242,21 @@ def _create_window(max_retries: int = 30, retry_delay: float = 0.5) -> bool:
     return True
 
 
+def _ensure_taskbar_window() -> bool:
+    """Recreate the overlay when Explorer replaces its taskbar window."""
+    if _runtime is None:
+        return False
+    taskbar = u32.FindWindowW("Shell_TrayWnd", None)
+    hwnd = _runtime.hwnd
+    if hwnd and u32.IsWindow(hwnd) and taskbar and u32.GetParent(hwnd) == taskbar:
+        return True
+    if hwnd:
+        _runtime.hwnd = None
+        if u32.IsWindow(hwnd):
+            u32.DestroyWindow(hwnd)
+    return _create_window(max_retries=1, retry_delay=0)
+
+
 
 def run_taskbar(
     store: AtomicStateStore,
@@ -1177,28 +1273,32 @@ def run_taskbar(
         on_refresh=on_refresh,
         view=build_tracker_view(store.load(), settings.enabled_providers),
     )
-    retry_timer = None
+    reconnect_timer = None
     try:
-        if not _create_window(max_retries=10, retry_delay=0.2):
-            retry_timer = u32.SetTimer(None, 0, 2000, None)
+        _create_window(max_retries=10, retry_delay=0.2)
+        # A thread timer is not owned by the taskbar child, so it survives when
+        # Explorer destroys and replaces Shell_TrayWnd during login or restart.
+        reconnect_timer = u32.SetTimer(None, 0, SHELL_RECONNECT_INTERVAL_MS, None)
 
         message = wintypes.MSG()
         while True:
             result = u32.GetMessageW(ctypes.byref(message), None, 0, 0)
             if result <= 0:
                 break
-            if retry_timer and message.message == WM_TIMER and _runtime and not _runtime.hwnd:
-                if _create_window(max_retries=1, retry_delay=0):
-                    u32.KillTimer(None, retry_timer)
-                    retry_timer = None
+            if (
+                reconnect_timer
+                and message.message == WM_TIMER
+                and message.wParam == reconnect_timer
+            ):
+                _ensure_taskbar_window()
 
             u32.TranslateMessage(ctypes.byref(message))
             u32.DispatchMessageW(ctypes.byref(message))
         return 0
     finally:
-        if retry_timer:
-            u32.KillTimer(None, retry_timer)
-            retry_timer = None
+        if reconnect_timer:
+            u32.KillTimer(None, reconnect_timer)
+            reconnect_timer = None
         _font_cache.cleanup()
         if _background_brush:
             g32.DeleteObject(_background_brush)

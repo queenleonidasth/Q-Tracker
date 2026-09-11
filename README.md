@@ -1,163 +1,162 @@
-# Q-Tracker for Windows
+﻿# Q-Tracker for Windows
 
-แอป Windows 11 สำหรับดู quota ของ **Codex**, **Antigravity (AGY)** และ **Gemini CLI** บน taskbar พร้อม system tray, dashboard, การรวม token usage ของ Codex อัตโนมัติ และการแจ้งเตือนเมื่อ quota ต่ำ
+<p align="center">
+  <img src="https://img.shields.io/badge/Platform-Windows%2011-blue?logo=windows" alt="Platform" />
+  <img src="https://img.shields.io/badge/Python-3.13%2B-blue?logo=python" alt="Python" />
+  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License" />
+  <a href="https://github.com/queenleonidasth/Q-Tracker/releases"><img src="https://img.shields.io/github/v/release/queenleonidasth/Q-Tracker?color=orange&label=Release" alt="GitHub Release" /></a>
+</p>
 
-ข้อมูลอยู่ในเครื่องทั้งหมด ไม่มี telemetry และไม่เก็บ access token ลง state หรือ log
+แอปพลิเคชันสำหรับ Windows 11 ที่แสดงสถานะโควต้า (Quota) และการใช้งานโทเค็นของ AI Coding Assistants ยอดนิยม ได้แก่ **Codex**, **Antigravity (AGY)** และ **Gemini CLI** โดยฝังลงบน **Windows Taskbar** แบบเนียนตา พร้อมเมนู System Tray, หน้าต่าง Dashboard ที่ทันสมัย, ระบบรวบรวม Token อัตโนมัติ และการแจ้งเตือนเมื่อโควต้าใกล้หมด
 
-## ติดตั้งและเปิดใช้
+🔒 **Privacy & Performance First**: ข้อมูลทั้งหมดถูกประมวลผลและเก็บอยู่ภายในเครื่องของคุณ ไม่มีการส่ง telemetry ใดๆ ออกไปภายนอก ไม่เก็บ access token ลง state/log และไม่เปิด process CLI/หน้าต่าง console รบกวนการทำงาน
 
-เปิด PowerShell ในโฟลเดอร์โปรเจกต์ แล้วรันครั้งเดียว:
+---
+
+## 🌟 จุดเด่นหลัก (Key Features)
+
+- 📌 **Taskbar Integration**: แสดงโควต้าและเวลา countdown จน reset ถัดไปบน Taskbar ของ Windows 11 โดยตรง รองรับทั้ง Taskbar จัดกึ่งกลาง (Center) และจัดชิดซ้าย (Left-aligned) โดยคำนวณตำแหน่งหลบปุ่ม Start และ Task buttons อัตโนมัติ ไม่บัง System Tray
+- 🔄 **Explorer Auto-Reconnect**: ทนทานต่อการ restart หรือ crash ของ Windows Explorer ด้วย thread-level timer ที่จะ attach กลับเข้า taskbar ใหม่ทันทีโดยไม่ต้องเปิดแอปใหม่
+- ⚡ **Multi-Provider Quota Tracking**:
+  - **Codex**: แสดงทั้งหน้าต่างสั้น **5 ชั่วโมง (`5H`)** และรายสัปดาห์ (`W`) พร้อมเวลา reset แยกกัน และแปลง label ตาม duration จริง (เช่น `4H`, `75m`) รวบรวม token usage อัตโนมัติจาก session log แบบ incremental
+  - **Antigravity (AGY)**: ดึง quota จาก local API ที่กำลังรัน หรือดึงผ่าน Google Cloud API (`fetchAvailableModels`) โดยอ่าน OAuth credential จาก Windows Credential Manager (`gemini:antigravity`) แบบ read-only โดยไม่ต้องเปิดโปรแกรม AGY ทิ้งไว้
+  - **Gemini CLI**: ดึง quota สำหรับโมเดล Pro, Flash, Flash Lite ผ่าน Code Assist API (`cloudcode-pa.googleapis.com`) โดยอ่าน credential ที่มีอยู่แล้วจาก `~/.gemini`
+- 🛡️ **Zero Console / Zero Child Spawn**: ดึงและ refresh token ผ่าน OAuth และ local APIs โดยตรง ไม่สั่งรัน child process หรือเปิด popup console
+- 🔔 **Smart Notifications**: แจ้งเตือนผ่าน Windows notification เมื่อโควต้าลดลงเหลือ 20%, 10% และ 5% (แจ้งครั้งเดียวต่อ threshold ในแต่ละ window)
+- 📊 **Rich Dashboard**: ดับเบิลคลิกเพื่อดูรายละเอียดแบบเจาะลึก แยกตาม provider, ดู source, freshness, สถานะ connection, และสถิติ token วันนี้ / เดือนนี้ / ทั้งหมด
+- 🚀 **Auto-Startup**: สามารถเปิดให้รันพร้อม Windows ได้ในคลิกเดียวผ่าน Dashboard (เขียนเฉพาะ registry HKCU ไม่ต้องใช้สิทธิ์ Admin)
+
+---
+
+## 📥 ดาวน์โหลดและติดตั้ง
+
+### วิธีที่ 1: ดาวน์โหลด Release (แนะนำสำหรับผู้ใช้ทั่วไป)
+1. ไปที่หน้า [Releases](https://github.com/queenleonidasth/Q-Tracker/releases/latest)
+2. ดาวน์โหลดไฟล์ `Q-Tracker-v1.4.0-windows-x64.zip`
+3. แตกไฟล์ zip ไปยังโฟลเดอร์ที่ต้องการ (เช่น `C:\Users\<user>\AppData\Local\Programs\Q-Tracker` หรือโฟลเดอร์ใดๆ)
+4. ดับเบิลคลิกไฟล์ `Q-Tracker.exe` เพื่อเริ่มใช้งานได้ทันที
+
+### วิธีที่ 2: ติดตั้งและรันจาก Source Code (สำหรับ Developers)
+เปิด PowerShell ในโฟลเดอร์โปรเจกต์ แล้วรันสคริปต์ setup ครั้งเดียว:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
-สคริปต์จะหา/ติดตั้ง Python 3.13 แบบ current-user, สร้าง `.venv`, ติดตั้ง dependency และรัน tests จากนั้นเปิดโปรแกรมด้วย:
+สคริปต์จะค้นหาหรือติดตั้ง Python 3.13 (แบบ per-user ผ่าน winget ถ้าจำเป็น), สร้าง `.venv`, ติดตั้ง dependencies และรันชุดการทดสอบทั้งหมด (Tests)
+
+จากนั้นสามารถเปิดใช้งานได้ผ่าน:
 
 ```powershell
 .\run.bat
 ```
 
-`run.bat` จะเลือก executable ที่ build แล้วก่อน หากยังไม่มีจะใช้ `.venv\Scripts\pythonw.exe` จึงไม่เปิดหน้าต่าง console ค้างไว้
+> `run.bat` จะเลือกไฟล์ executable ในโฟลเดอร์ `dist` ก่อน หากยังไม่ได้ build จะรันผ่าน `.venv\Scripts\pythonw.exe` ทำให้ไม่มีหน้าต่าง console สีดำค้างไว้
 
-## การใช้งาน
+---
 
-- ดับเบิลคลิกข้อความบน taskbar หรือ tray icon เพื่อเปิด dashboard
-- คลิกขวาที่ taskbar/tray เพื่อ Refresh, ดู token summary หรือ Exit
-- Dashboard แสดง quota จริง, เวลาจน reset, source, freshness และยอด token วันนี้/เดือนนี้/ทั้งหมด
-- เปิด `Start with Windows` ใน dashboard เพื่อเพิ่มเฉพาะค่า `Q-Tracker` ใต้ HKCU; ไม่ต้องใช้สิทธิ์ admin
-- การแจ้งเตือนเริ่มที่ 20%, 10% และ 5% และแจ้งเพียงครั้งเดียวต่อ threshold/reset window
+## 🖥️ การใช้งาน
 
-### สัญลักษณ์สถานะ
+- **ดับเบิลคลิก** ข้อความบน Taskbar หรือ Tray Icon: เพื่อเปิดหน้าต่าง Dashboard
+- **คลิกขวา** ที่ข้อความบน Taskbar หรือ Tray Icon: เพื่อเปิดเมนูลัด (Refresh, Token Summary, Exit)
+- **สัญลักษณ์สถานะบน Taskbar**:
+  | สถานะ | เครื่องหมาย | ความหมาย |
+  |---|:---:|---|
+  | `ok` | *(ไม่มี)* | ข้อมูลถูกต้องและอัปเดตจาก source ล่าสุด |
+  | `stale` | `~` | แสดงค่าเดิมที่ยังมีประโยชน์ แต่ source ยังไม่ยืนยันข้อมูลรอบใหม่ |
+  | `error` / `unavailable` | `!` | พบปัญหาในการ refresh โดยค่าที่เห็นจะเป็น last-good และจะไม่ถูกปลอมเป็น 100% |
+- **สีสถานะ**: 
+  - สีปกติ (ตามสี provider): โควต้าคงเหลือ > 20%
+  - 🟡 **สีเหลือง**: โควต้าเหลือน้อยกว่าหรือเท่ากับ 20%
+  - 🔴 **สีแดง**: โควต้าเหลือน้อยกว่าหรือเท่ากับ 10%
 
-| สถานะ | เครื่องหมาย | ความหมาย |
-|---|---:|---|
-| `ok` | ไม่มี | ยืนยันข้อมูลจาก source สำเร็จ |
-| `stale` | `~` | แสดงค่าล่าสุดที่ยังมีประโยชน์ แต่ source ยังไม่ยืนยันข้อมูลใหม่ |
-| `error`, `unavailable`, `rate_limited` | `!` | refresh มีปัญหา; ค่าที่เห็นอาจเป็น last-good และจะไม่ถูกปลอมเป็น 100% |
+---
 
-สีเหลืองหมายถึงเหลือไม่เกิน 20% และสีแดงหมายถึงเหลือไม่เกิน 10%
+## ⚙️ แหล่งข้อมูลและการตั้งค่า (Data Sources & Configuration)
 
-## แหล่งข้อมูลและลำดับความสำคัญ
+### 1. Codex
+- ดึง quota จาก live usage API ผ่าน local session ที่ Codex CLI มีอยู่แล้วในเครื่อง
+- แสดงหน้าต่างรอบระยะสั้น (`5H`) และระยะยาว (`W`) พร้อม countdown เวลา reset
+- สแกนและรวบรวม token จาก `%USERPROFILE%\.codex\sessions` และ `archived_sessions`
 
-### Codex
+### 2. Antigravity (AGY)
+- อ่านจาก local API ของโปรแกรม AGY ที่กำลังทำงาน
+- หาก AGY ไม่ได้เปิดอยู่ จะ fallback ไปดึงผ่าน Google Cloud API โดยอ่าน OAuth credential จาก Windows Credential Manager (`gemini:antigravity`) แบบ read-only
+- ต้องเคย sign in ผ่าน `agy` CLI ในเครื่องอย่างน้อย 1 ครั้ง
+- รองรับการตั้งค่า Environment Variables สำหรับ refresh token:
+  - `Q_TRACKER_AGY_OAUTH_CLIENT_ID`
+  - `Q_TRACKER_AGY_OAUTH_CLIENT_SECRET` (และ suffix `_2` สำหรับ secondary client)
 
-1. quota จาก live usage API โดยใช้ session ที่ Codex CLI มีอยู่แล้วในเครื่อง — แสดงทั้งหน้าต่าง **5 ชั่วโมง** (`5H`) และรายสัปดาห์ (`W`) พร้อมเวลา reset แยกกันบน taskbar, tray และ dashboard
-2. หาก live quota ใช้ไม่ได้ จะคง last-good พร้อมสถานะ error/stale
-3. label สรุปมาจาก duration จริงที่ backend รายงาน (เช่น `4H`, `75m`) ไม่ใช่ค่าตายตัว
-4. token usage รวมจาก `%USERPROFILE%\.codex\sessions` และ `archived_sessions` โดยอ่าน JSONL แบบ incremental, ตัด event replay ซ้ำ และรองรับทั้ง `last_token_usage` กับ cumulative delta
+### 3. Gemini CLI
+- อ่าน OAuth credential ที่ Gemini CLI จัดเก็บไว้ใน `~/.gemini/oauth_creds.json` หรือ encrypted `~/.gemini/mcp-oauth-tokens-v2.json`
+- เชื่อมต่อ Code Assist backend (`cloudcode-pa.googleapis.com`) เพื่อดึง quota รายโมเดล (`pro`, `flash`, `flash_lite`)
+- รองรับการตั้งค่า Environment Variables สำหรับ refresh token:
+  - `Q_TRACKER_GEMINI_OAUTH_CLIENT_ID`
+  - `Q_TRACKER_GEMINI_OAUTH_CLIENT_SECRET`
 
-เลือก window ที่จะแสดงบน taskbar ต่อ provider ได้ผ่าน `display.taskbar_windows` ใน `config.json` (ค่า default = built-in order):
+### การปรับแต่ง `config.json`
+ไฟล์คอนฟิกถูกเก็บอยู่ที่ `data/config.json` (เมื่อรันจาก source) หรือ `%LOCALAPPDATA%\Q-Tracker\config.json` (เมื่อรัน executable):
 
 ```json
 {
+  "refresh_interval_seconds": 60,
+  "enabled_providers": ["agy", "codex"],
+  "notification_thresholds": [0.2, 0.1, 0.05],
   "display": {
-    "taskbar_windows": { "codex": ["session", "weekly"] }
+    "taskbar_windows": {
+      "codex": ["session", "weekly"]
+    }
   }
 }
 ```
 
-ตั้งเป็น `["weekly"]` เพื่อกลับไปใช้โหมดแสดงเฉพาะโควต้ารายสัปดาห์ id ที่ใช้ได้: `session`, `weekly`, `monthly`, `code_review`, `pro`, `flash`, `flash_lite`
+- `display.taskbar_windows`: เลือก window ที่จะให้แสดงบน taskbar สำหรับ provider นั้นๆ เช่น `["session", "weekly"]` หรือ `["weekly"]` (ค่าที่รองรับ: `session`, `weekly`, `monthly`, `code_review`, `pro`, `flash`, `flash_lite`)
 
-### Antigravity
+---
 
-1. local API ของ AGY ที่กำลังรันอยู่
-2. cloud API ของ Google (`fetchAvailableModels`) โดยอ่าน OAuth token ที่ agy CLI เก็บไว้แล้วใน Windows Credential Manager (`gemini:antigravity`) แบบ read-only — ไม่ต้องเปิด AGY และจะ refresh access token เองเมื่อหมดอายุเมื่อกำหนด OAuth client ผ่าน environment variables
-3. cache ล่าสุดของ AGY พร้อมอายุข้อมูล
-4. last-good ของ tracker พร้อมสถานะที่ตรงกับความจริง
+## 🔨 การ Build เป็น Executable
 
-Tracker จะ **ไม่เปิด `agy.exe` เอง** จึงไม่สร้าง MCP process หรือ console popup ตามรอบ refresh ต้องเปิด `agy` CLI และ sign in ให้สำครัญอย่างน้อยหนึ่งครั้งก่อน เพื่อให้ credential ถูกเก็บใน Credential Manager ที่ tracker อ่าน
-
-สำหรับการ refresh token ของ AGY ให้กำหนด `Q_TRACKER_AGY_OAUTH_CLIENT_ID` และ `Q_TRACKER_AGY_OAUTH_CLIENT_SECRET` (เพิ่ม suffix `_2` ได้สำหรับ client สำรอง) ใน environment ของเครื่อง โดยไม่เก็บค่าไว้ใน repository
-
-### Gemini
-
-1. อ่าน OAuth credentials ที่ Gemini CLI เก็บไว้แล้วในเครื่อง (`~\.gemini\oauth_creds.json` หรือ encrypted `~\.gemini\mcp-oauth-tokens-v2.json`)
-2. ต่อ API ของ Code Assist backend (`cloudcode-pa.googleapis.com`) เพื่อขอ quota ราย model family (`pro`, `flash`, `flash_lite`) และ refresh token เมื่อกำหนด OAuth client ผ่าน environment variables
-3. ต้องรัน `gemini` CLI และ sign in ให้สำเร็จอย่างน้อยหนึ่งครั้งก่อน Q-Tracker จะเห็น credential และแสดง quota ได้
-
-Tracker จะ **ไม่สปอน `gemini` CLI** ไม่สร้าง child process หรือ console popup โดยอ่านและ refresh token ที่มีอยู่แล้วผ่าน OAuth ตามวิธีเดียวกับเครื่องมือ open-source อื่น (gusage, TokenTracker)
-
-สำหรับการ refresh token ของ Gemini ให้กำหนด `Q_TRACKER_GEMINI_OAUTH_CLIENT_ID` และ `Q_TRACKER_GEMINI_OAUTH_CLIENT_SECRET` ใน environment ของเครื่อง โดยไม่เก็บค่าไว้ใน repository
-
-## Build เป็น executable
+สามารถคอมไพล์โปรเจกต์เป็น Standalone Windows Executable ได้ง่ายๆ ด้วยคำสั่ง:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-Build gate จะรัน test suite ก่อนสร้าง PyInstaller แบบ `onedir/windowed` ที่:
+สคริปต์จะทำการ:
+1. รัน pytest ตรวจสอบความถูกต้องของโค้ดทั้งหมด
+2. ล้างโฟลเดอร์ build เก่า
+3. รัน PyInstaller (`Q-Tracker.spec`) สร้าง binary ไว้ที่ `dist\Q-Tracker\`
+4. อัปเดตการลงทะเบียน Windows startup (ถ้ามี) ให้ชี้ไปยัง exe ตัวใหม่
 
-```text
-dist\Q-Tracker\Q-Tracker.exe
-```
+---
 
-ต้องเก็บทั้งโฟลเดอร์ `dist\Q-Tracker` ไว้ด้วยกัน ไม่ควรคัดลอกเฉพาะไฟล์ `.exe`
-
-## คำสั่งดูแลระบบ
+## 🧰 คำสั่งจัดการและ Debug (CLI Tools)
 
 ```powershell
-# บังคับ refresh และแสดงสถานะ provider
+# บังคับ Refresh ข้อมูลทุก Provider ทันที พร้อมแสดงสถานะ
 .\.venv\Scripts\python.exe .\app.py --refresh
 
-# health report ที่ whitelist field และตัดข้อมูลลับออก
+# แสดงรายงานสถานะระบบ (Diagnostics) โดยจะตัดข้อมูลความลับออกทั้งหมด
 .\.venv\Scripts\python.exe .\app.py --diagnostics
 
-# เปิด dashboard โดยตรง
+# เปิดหน้าต่าง Dashboard โดยตรง
 .\.venv\Scripts\pythonw.exe .\app.py --dashboard
 
-# รันชุดทดสอบทั้งหมด
-.\.venv\Scripts\python.exe -m pytest -q
+# รันชุดทดสอบ (Pytest Suite)
+.\.venv\Scripts\python.exe -m pytest -v
 ```
 
-## ตำแหน่งข้อมูล
+---
 
-| โหมด | State/config/log |
-|---|---|
-| รันจาก source | `<project>\data` |
-| รัน executable | `%LOCALAPPDATA%\Q-Tracker` |
+## 🛡️ Privacy, Security & Data Safety
 
-ไฟล์หลักคือ `token_usage.json`, `config.json` และ `logs\app.log` State ใช้ schema v3, file lock ข้าม process และ atomic replace; หาก JSON เสียจะสำรองเป็น `token_usage.json.corrupt-*` ก่อนกู้ค่าเริ่มต้น
+- **No Telemetry**: ไม่มีระบบติดตาม พฤติกรรม หรือส่งข้อมูลสถิติออกภายนอก
+- **No Secret Leakage**: ไม่มีการบันทึก access token, refresh token, CSRF token, หรือ Authorization header ลงในไฟล์ log หรือ diagnostics รายงาน diagnostics จะแสดงเฉพาะ boolean, sanitized path และ timestamp เท่านั้น
+- **Safe Storage**: บันทึกข้อมูลแบบ Atomic Replacement พร้อม File Locking ข้าม process หากไฟล์ JSON เสียหาย ระบบจะทำสำเนา backup อัตโนมัติก่อนกู้คืนค่าเริ่มต้น
+- **Read-Only Credentials**: อ่าน credential ของผู้ใช้เพื่อคุยกับ API ทางการเท่านั้น ไม่มีการดัดแปลงหรือเขียนทับ credentials ของ CLI อื่น
 
-## Privacy และความปลอดภัย
+---
 
-- ไม่มี telemetry, cloud sync, browser-cookie extraction หรือ billing estimate
-- ไม่บันทึก access token, refresh token, Authorization header, CSRF token หรือ response body ลง log/diagnostics
-- Codex auth ถูกอ่านเฉพาะเพื่อ request quota ที่ผู้ใช้มี session อยู่แล้ว
-- AGY ติดต่อเฉพาะ local API/process ที่กำลังรัน, อ่าน OAuth token จาก Windows Credential Manager แบบ read-only เพื่อขอ quota จาก Google โดยตรง และอ่าน cache ในเครื่อง (ไม่มีการเขียน token กลับ)
-- Gemini ใช้เฉพาะ OAuth token ที่ CLI เก็บไว้ในเครื่อง ต่อกับ API อย่างเป็นทางการของ Google และไม่เคยส่ง token ไปที่อื่น
-- Diagnostics แสดงเฉพาะ boolean, version, path ที่ย่อชื่อ user, timestamp, source/status และจำนวนไฟล์สแกน
+## 📄 License
 
-## แก้ปัญหาเบื้องต้น
-
-**Codex ขึ้น `auth_required` หรือ `unavailable`**
-
-เปิด Codex CLI และ sign in ให้สำเร็จ แล้วกด `Refresh now` Token totals จาก session logs ยังทำงานได้แม้ live quota ใช้ไม่ได้
-
-**AGY ขึ้น stale/unavailable**
-
-ต้องมี sign in ผ่าน `agy` CLI อย่างน้อยหนึ่งครั้งเพื่อให้เก็บ OAuth token ไว้ใน Windows Credential Manager หลังจากนั้น tracker ดึง quota ผ่าน cloud API ได้แม้ AGY ปิดอยู่ หากยังไม่ขึ้นให้เปิด Antigravity ตามปกติและกด `Refresh now` Tracker จะไม่เปิด AGY แทนผู้ใช้
-
-**Gemini ขึ้น `auth_required` หรือ `unavailable`**
-
-เปิด `gemini` CLI และ sign in ให้สำเร็จครั้งเดียว (Gemini CLI จะเขียน credential ลง `~\.gemini`) แล้วกด `Refresh now`
-
-**taskbar ไม่ปรากฏหลัง Explorer restart/เปลี่ยนจอ**
-
-Exit จาก tray แล้วเปิด `run.bat` ใหม่ ตัว widget รองรับ display/DPI/taskbar setting change และคำนวณตำแหน่งจาก client area ของ taskbar ใหม่อัตโนมัติ โดยอ่านขอบเขต notification area แบบ dynamic และเว้นพื้นที่อย่างน้อยหนึ่งช่องตามความสูง taskbar เพื่อไม่บังลูกศรหรือไอคอน รวมทั้งใช้ตำแหน่งสำรองชั่วคราวระหว่าง Explorer จัด layout ใหม่
-
-**การแสดงผลเมื่อเปิดหน้าต่างเต็มจอ**
-
-Q-Tracker เป็น child window ภายใน `Shell_TrayWnd` ตามรูปแบบ taskbar-integrated widget จึงคงตำแหน่งเมื่อ taskbar จัด layout ใหม่และยังแสดงเมื่อเปิด Start หรือคลิก Desktop/Maximize ตามปกติ แต่จะซ่อนอัตโนมัติเมื่อ taskbar ไม่พร้อมใช้งาน หรือเมื่อเกม/วิดีโอด้านหน้าใช้ fullscreen/borderless fullscreen บนจอเดียวกัน และจะแสดงกลับโดยไม่แย่ง focus
-
-**ต้องการตรวจสุขภาพโดยไม่เปิด console ค้าง**
-
-เปิด dashboard แล้วกด `Diagnostics` หรือรัน `app.py --diagnostics` จาก PowerShell Log หมุนอัตโนมัติที่ 1 MB จำนวน 3 ไฟล์สำรอง
-
-**ติดตั้งไม่สำเร็จ**
-
-ตรวจว่า `winget` ใช้งานได้ แล้วรัน `setup.ps1` ใหม่ การติดตั้งทั้งหมดเป็น per-user
-
-## ข้อจำกัดที่ตั้งใจไว้
-
-เวอร์ชันนี้รองรับ Windows 11, Codex, Antigravity และ Gemini CLI เท่านั้น ไม่ดึง billing, ไม่คาดเดา quota ที่ provider ไม่ส่งมา และไม่เปิด provider process เพื่อบังคับ refresh
+โปรเจกต์นี้เผยแพร่ภายใต้สัญญาอนุญาต [MIT License](LICENSE)

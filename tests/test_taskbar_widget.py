@@ -78,71 +78,84 @@ def _provider(provider_id: str, name: str, windows: tuple[WindowView, ...]) -> P
     )
 
 
-def test_right_aligned_start_keeps_twelve_pixel_margin():
-    """Short content must end twelve pixels before the overlay's right edge."""
-    assert widget._right_aligned_start(client_width=400, content_width=320) == 68
+def test_left_aligned_start_keeps_twelve_pixel_margin():
+    """Fitting content starts twelve pixels inside the left edge."""
+    assert widget._left_aligned_start(client_width=400, content_width=320) == 12
 
 
-def test_right_aligned_start_falls_back_to_left_margin_for_overflow():
-    """Long content must not receive a negative or off-window start coordinate."""
-    assert widget._right_aligned_start(client_width=400, content_width=410) == 10
+def test_left_aligned_start_uses_full_width_for_overflow():
+    """Overflowing content starts at zero so useful text is not clipped twice."""
+    assert widget._left_aligned_start(client_width=400, content_width=410) == 0
 
 
-def test_horizontal_position_keeps_230_pixel_right_reserve():
-    """A geometry refresh must preserve the user's current taskbar-relative anchor."""
+def test_horizontal_position_uses_left_taskbar_margin():
+    """The overlay is anchored to the left side instead of the system tray."""
     assert widget._taskbar_overlay_position((0, 1032, 1920, 1080), 460) == (
-        1230,
+        12,
         1032,
         460,
         48,
     )
 
 
-def test_horizontal_position_reserves_taskbar_height_before_notification_area():
-    """One taskbar slot must protect XAML controls that overhang their HWND."""
+def test_horizontal_position_stays_before_centered_primary_controls():
+    """Centered Start/task buttons define a clean right edge for the left region."""
     assert widget._taskbar_overlay_position(
-        (0, 1392, 3440, 1440),
+        (0, 1032, 1920, 1080),
         460,
-        (3169, 1392, 3440, 1440),
-    ) == (2661, 1392, 460, 48)
+        (1695, 1032, 1920, 1080),
+        primary_bounds=(717, 1032, 1114, 1080),
+    ) == (12, 1032, 460, 48)
 
 
-def test_horizontal_position_scales_notification_gap_with_taskbar_height():
-    """A taller DPI-scaled taskbar must receive a proportionally larger gap."""
+def test_horizontal_position_clamps_before_centered_primary_controls():
+    """Long content shrinks before it can overlap centered taskbar buttons."""
     assert widget._taskbar_overlay_position(
-        (0, 1376, 2560, 1440),
+        (0, 1032, 1920, 1080),
         460,
-        (2200, 1376, 2560, 1440),
-    ) == (1676, 1376, 460, 64)
+        (1695, 1032, 1920, 1080),
+        desired_width=700,
+        primary_bounds=(600, 1032, 1114, 1080),
+    ) == (12, 1032, 568, 48)
+
+
+def test_horizontal_position_moves_after_left_aligned_primary_controls():
+    """Left-aligned Windows layouts fall back to the space after task buttons."""
+    assert widget._taskbar_overlay_position(
+        (0, 1032, 1920, 1080),
+        460,
+        (1695, 1032, 1920, 1080),
+        primary_bounds=(0, 1032, 900, 1080),
+    ) == (920, 1032, 460, 48)
 
 
 def test_horizontal_position_clamps_width_before_narrow_notification_area():
-    """A narrow band shrinks the child instead of crossing the tray."""
+    """A narrow left band shrinks the child instead of crossing the tray."""
     position = widget._taskbar_overlay_position(
         (0, 1392, 600, 1440),
         460,
         (300, 1392, 600, 1440),
     )
 
-    assert position == (0, 1392, 252, 48)
+    assert position == (12, 1392, 240, 48)
 
 
-def test_horizontal_position_keeps_fixed_reserve_without_notification_area():
-    """Explorer transitions retain the deterministic fallback."""
+def test_horizontal_position_keeps_left_margin_without_notification_area():
+    """Explorer transitions retain the deterministic left anchor."""
     assert widget._taskbar_overlay_position(
         (0, 1032, 1920, 1080),
         460,
         None,
-    ) == (1230, 1032, 460, 48)
+    ) == (12, 1032, 460, 48)
 
 
 def test_horizontal_position_ignores_notification_area_outside_taskbar():
-    """A rectangle extending beyond the taskbar cannot override the fallback."""
+    """A rectangle extending beyond the taskbar cannot override the left anchor."""
     assert widget._taskbar_overlay_position(
         (0, 1032, 1920, 1080),
         460,
         (1500, 1032, 2500, 1080),
-    ) == (1230, 1032, 460, 48)
+    ) == (12, 1032, 460, 48)
 
 
 def test_notification_area_bounds_discovers_visible_tray_notify_window(monkeypatch):
@@ -202,7 +215,7 @@ def test_reposition_skips_unchanged_valid_position(monkeypatch):
     """Repeated display notifications must not move an already-correct overlay."""
     runtime = _runtime(_view("test"))
     runtime.settings.display = {"width": 460}
-    runtime.last_position = (1230, 0, 460, 48)
+    runtime.last_position = (12, 0, 460, 48)
 
     monkeypatch.setattr(
         widget,
@@ -252,7 +265,7 @@ def test_reposition_uses_taskbar_client_coordinates(monkeypatch):
         (
             100,
             None,
-            1230,
+            12,
             0,
             460,
             48,
@@ -289,7 +302,7 @@ def test_reposition_uses_current_taskbar_client_size_after_resolution_change(mon
         (
             100,
             None,
-            1870,
+            12,
             0,
             460,
             64,
@@ -336,7 +349,7 @@ def test_reposition_uses_dynamic_notification_boundary_in_client_coordinates(mon
         (
             100,
             None,
-            1061,
+            12,
             0,
             460,
             48,
@@ -843,7 +856,7 @@ def test_overlay_position_shrinks_to_desired_content_width():
         (0, 1032, 1920, 1080),
         460,
         desired_width=300,
-    ) == (1390, 1032, 300, 48)
+    ) == (12, 1032, 300, 48)
 
 
 def test_overlay_position_clamps_desired_width_and_keeps_floor():
@@ -852,12 +865,12 @@ def test_overlay_position_clamps_desired_width_and_keeps_floor():
         (0, 1032, 1920, 1080),
         460,
         desired_width=5_000,
-    ) == (970, 1032, 720, 48)
+    ) == (12, 1032, 720, 48)
     assert widget._taskbar_overlay_position(
         (0, 1032, 1920, 1080),
         460,
         desired_width=100,
-    ) == (1450, 1032, 240, 48)
+    ) == (12, 1032, 240, 48)
     narrow = widget._taskbar_overlay_position(
         (0, 1032, 800, 1080),
         460,
@@ -890,7 +903,7 @@ def test_reposition_flags_compact_when_content_exceeds_space(monkeypatch):
 
     assert widget._reposition(100) is True
     assert runtime.compact_countdowns is True
-    assert set_position_calls[0][2:6] == (970, 0, 720, 48)
+    assert set_position_calls[0][2:6] == (12, 0, 720, 48)
 
 
 def test_reposition_keeps_full_mode_when_content_fits(monkeypatch):
@@ -916,7 +929,7 @@ def test_reposition_keeps_full_mode_when_content_fits(monkeypatch):
 
     assert widget._reposition(100) is True
     assert runtime.compact_countdowns is False
-    assert set_position_calls[0][2:6] == (1230, 0, 460, 48)
+    assert set_position_calls[0][2:6] == (12, 0, 460, 48)
 
 
 def test_shell_timer_rechecks_geometry_without_moving_unchanged_window(monkeypatch):
@@ -1324,8 +1337,8 @@ def test_create_window_registers_data_and_shell_timers(monkeypatch):
     ]
 
 
-def test_run_taskbar_sets_retry_timer_when_initial_window_creation_fails(monkeypatch):
-    """When Explorer is not available on startup, run_taskbar must set a retry timer instead of exiting immediately."""
+def test_run_taskbar_sets_reconnect_timer_when_initial_window_creation_fails(monkeypatch):
+    """The thread timer must survive until Explorer creates its taskbar."""
     timer_calls = []
     messages = [SimpleNamespace(message=123)]
 
@@ -1358,8 +1371,60 @@ def test_run_taskbar_sets_retry_timer_when_initial_window_creation_fails(monkeyp
     )
 
     assert result == 0
-    assert ("set", (None, 0, 2000, None)) in timer_calls
+    assert ("set", (None, 0, widget.SHELL_RECONNECT_INTERVAL_MS, None)) in timer_calls
     assert ("kill", (None, 999)) in timer_calls
+
+
+def test_reconnect_timer_recreates_overlay_after_explorer_restart(monkeypatch):
+    """A stale child handle must not prevent attachment to the new taskbar."""
+    runtime = _runtime(_view("test"))
+    runtime.hwnd = 321
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    destroyed = []
+    created = []
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            FindWindowW=lambda *_: 99,
+            IsWindow=lambda hwnd: hwnd == 321,
+            GetParent=lambda _hwnd: 88,
+            DestroyWindow=lambda hwnd: destroyed.append(hwnd) or 1,
+        ),
+    )
+    monkeypatch.setattr(
+        widget,
+        "_create_window",
+        lambda *args, **kwargs: created.append((args, kwargs)) or True,
+    )
+
+    assert widget._ensure_taskbar_window() is True
+    assert runtime.hwnd is None
+    assert destroyed == [321]
+    assert created == [((), {"max_retries": 1, "retry_delay": 0})]
+
+
+def test_unexpected_overlay_destroy_does_not_quit_message_loop(monkeypatch):
+    """Explorer-owned destruction should leave the process alive for reconnect."""
+    runtime = _runtime(_view("test"))
+    runtime.hwnd = 321
+    runtime.shutting_down = False
+    quit_calls = []
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    monkeypatch.setattr(widget, "_uninstall_shell_event_hook", lambda: None)
+    monkeypatch.setattr(widget._font_cache, "cleanup", lambda: None)
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            PostQuitMessage=lambda code: quit_calls.append(code),
+            DefWindowProcW=lambda *_: 0,
+        ),
+    )
+
+    assert widget._wnd_proc(321, widget.WM_DESTROY, 0, 0) == 0
+    assert runtime.hwnd is None
+    assert quit_calls == []
 
 
 def test_reposition_ignores_zero_dimensions(monkeypatch):

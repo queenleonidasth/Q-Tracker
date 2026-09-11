@@ -80,7 +80,9 @@ def test_settings_recovers_invalid_json_with_safe_defaults(tmp_path):
     settings = Settings.load(path)
 
     assert settings.refresh_interval_seconds == 60
-    assert settings.enabled_providers == ("agy", "codex", "gemini")
+    assert settings.enabled_providers == ("agy", "codex")
+    assert settings.provider_styles["agy"]["color"] == "#F4C76B"
+    assert settings.provider_styles["codex"]["color"] == "#F4C76B"
     assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
 
 

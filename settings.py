@@ -11,10 +11,12 @@ from typing import Any
 
 
 DEFAULT_PROVIDER_STYLES = {
-    "agy": {"display_name": "Antigravity", "color": "#4FC3F7", "icon": "A"},
-    "codex": {"display_name": "Codex", "color": "#81C784", "icon": "C"},
+    "agy": {"display_name": "Antigravity", "color": "#F4C76B", "icon": "A"},
+    "codex": {"display_name": "Codex", "color": "#F4C76B", "icon": "C"},
     "gemini": {"display_name": "Gemini", "color": "#FFB74D", "icon": "G"},
 }
+
+DEFAULT_ENABLED_PROVIDERS = ("agy", "codex")
 
 TASKBAR_WINDOW_IDS = frozenset(
     {"session", "weekly", "monthly", "code_review", "pro", "flash", "flash_lite"}
@@ -111,9 +113,9 @@ class Settings:
                 if provider_id in styles
             )
         else:
-            enabled = tuple(styles)
+            enabled = DEFAULT_ENABLED_PROVIDERS
         if not enabled:
-            enabled = tuple(styles)
+            enabled = DEFAULT_ENABLED_PROVIDERS
 
         display = dict(DEFAULT_DISPLAY)
         raw_display = raw.get("display")

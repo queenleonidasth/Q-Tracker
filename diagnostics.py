@@ -108,7 +108,7 @@ def collect_diagnostics(settings: Settings, state: dict[str, Any]) -> dict[str, 
     return {
         "application": {
             "name": "Q-Tracker",
-            "version": "1.3.0",
+            "version": "1.4.0",
             "frozen": is_frozen(),
         },
         "runtime": {

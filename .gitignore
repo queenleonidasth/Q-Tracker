@@ -25,3 +25,10 @@ data/logs/
 
 # Local isolated development worktrees
 .worktrees/
+
+# Test & Workspace Cache
+.pytest_cache/
+.qnector/
+
+# Release archives
+*.zip
