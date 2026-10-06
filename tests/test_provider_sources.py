@@ -153,8 +153,8 @@ def test_codex_weekly_only_response_does_not_invent_a_session_window(tmp_path):
     assert snapshot.windows["weekly"].remaining_percent == 65
 
 
-def test_agy_live_groups_map_gemini_windows_and_preserve_extras(tmp_path):
-    """Plan-aware AGY buckets must keep session, weekly and non-Gemini windows distinct."""
+def test_agy_cloud_groups_map_gemini_windows_and_preserve_extras(tmp_path):
+    """Plan-aware AGY cloud buckets must keep session, weekly and non-Gemini windows distinct."""
     live = {
         "plan_tier": "Google AI Pro",
         "groups": {
@@ -176,13 +176,14 @@ def test_agy_live_groups_map_gemini_windows_and_preserve_extras(tmp_path):
         },
     }
     snapshot = AgyQuotaSource(
-        fetch_live=lambda: live,
+        fetch_live=lambda: (_ for _ in ()).throw(AssertionError("local probe must stay disabled")),
+        fetch_cloud=lambda: live,
         cache_path=tmp_path / "agy.json",
         now=lambda: NOW,
     ).fetch()
 
     assert snapshot.status is FetchStatus.OK
-    assert snapshot.source == "local_api"
+    assert snapshot.source == "cloud_api"
     assert snapshot.plan_type == "Google AI Pro"
     assert snapshot.windows["session"].remaining_percent == 80
     assert snapshot.windows["weekly"].remaining_percent == 55
@@ -225,8 +226,8 @@ def test_agy_old_cache_is_stale_and_uses_cache_observation_time(tmp_path):
     assert int((NOW - observed).total_seconds()) == 600
 
 
-def test_agy_missing_cache_and_live_process_is_unavailable(tmp_path):
-    """AGY being closed is an expected unavailable state, not a fake empty plan."""
+def test_agy_missing_cache_and_cloud_unavailable_is_unavailable(tmp_path):
+    """Missing cloud data and cache is unavailable without probing local AGY ports."""
     snapshot = AgyQuotaSource(
         fetch_live=lambda: None,
         fetch_cloud=lambda: None,
@@ -236,7 +237,7 @@ def test_agy_missing_cache_and_live_process_is_unavailable(tmp_path):
 
     assert snapshot.status is FetchStatus.UNAVAILABLE
     assert snapshot.windows == {}
-    assert "not running" in snapshot.message.lower()
+    assert "cloud api" in snapshot.message.lower()
 
 
 def test_agy_cloud_fallback_works_without_running_process(tmp_path):
@@ -271,6 +272,38 @@ def test_agy_cloud_fallback_works_without_running_process(tmp_path):
     assert snapshot.windows["gemini"].label == "Gemini"
     assert snapshot.windows["3p"].remaining_percent == 100.0
     assert snapshot.windows["3p"].label == "Claude & GPT"
+
+
+def test_agy_cloud_success_does_not_probe_local_server(tmp_path):
+    """Healthy cloud quota must not touch AGY's localhost listeners."""
+    cloud = {
+        "plan_tier": "Google AI Pro",
+        "groups": {
+            "gemini": {
+                "remaining_percent": 91.0,
+                "remaining_fraction": 0.91,
+                "reset_time": "2026-08-22T14:09:17Z",
+                "label": "Gemini",
+            }
+        },
+    }
+    local_calls = []
+
+    def local_probe():
+        local_calls.append(True)
+        raise AssertionError("local AGY API should not be probed when cloud fetch succeeds")
+
+    snapshot = AgyQuotaSource(
+        fetch_live=local_probe,
+        fetch_cloud=lambda: cloud,
+        cache_path=tmp_path / "missing.json",
+        now=lambda: NOW,
+    ).fetch()
+
+    assert snapshot.status is FetchStatus.OK
+    assert snapshot.source == "cloud_api"
+    assert snapshot.windows["gemini"].remaining_percent == 91.0
+    assert local_calls == []
 
 
 def test_agy_prefers_cloud_data_over_stale_cache(tmp_path):

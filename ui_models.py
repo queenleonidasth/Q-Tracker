@@ -292,7 +292,7 @@ def _period_total(period: Any) -> int:
 
 def build_tracker_view(
     state: dict[str, Any],
-    provider_order: Iterable[str] = ("agy", "codex", "gemini"),
+    provider_order: Iterable[str] = ("agy", "codex"),
     now: Optional[datetime] = None,
 ) -> TrackerView:
     reference = now or datetime.now().astimezone()

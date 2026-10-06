@@ -12,8 +12,8 @@ from typing import Any
 
 DEFAULT_PROVIDER_STYLES = {
     "agy": {"display_name": "Antigravity", "color": "#F4C76B", "icon": "A"},
-    "codex": {"display_name": "Codex", "color": "#F4C76B", "icon": "C"},
-    "gemini": {"display_name": "Gemini", "color": "#FFB74D", "icon": "G"},
+    "codex": {"display_name": "ChatGPT", "color": "#F4C76B", "icon": "C"},
+    # Gemini provider intentionally omitted; Antigravity already covers the requested Google quota surface.
 }
 
 DEFAULT_ENABLED_PROVIDERS = ("agy", "codex")

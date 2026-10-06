@@ -237,21 +237,22 @@ def _unleash_body() -> dict:
 
 def _probe_port(port: int) -> Optional[str]:
     """
-    Probe a port to check if it's the AGY language server.
-    
-    Tries HTTPS first (AGY's default), then HTTP.
-    Returns the working scheme ("https" or "http") or None.
+    Probe the AGY unencrypted HTTP JSON-RPC listener only.
+
+    AGY also exposes a separate TLS listener. Sending plain HTTP to that TLS
+    port makes AGY print a noisy "client sent an HTTP request to an HTTPS
+    server" message. Callers must therefore pass only the higher HTTP/RPC
+    listener port discovered for each agy.exe process.
     """
-    for scheme in ("https", "http"):
-        result = _make_request(
-            scheme=scheme,
-            port=port,
-            path="/exa.language_server_pb.LanguageServerService/GetUnleashData",
-            body=_unleash_body(),
-            timeout=3.0,
-        )
-        if result is not None:
-            return scheme
+    result = _make_request(
+        scheme="http",
+        port=port,
+        path="/exa.language_server_pb.LanguageServerService/GetUnleashData",
+        body=_unleash_body(),
+        timeout=3.0,
+    )
+    if result is not None:
+        return "http"
     return None
 
 
@@ -486,27 +487,35 @@ def fetch_from_running_agy(verbose: bool = False) -> Optional[dict]:
         elapsed = (time.perf_counter() - t0) * 1000
         print(f"  [AGY API] Found agy.exe PID(s): {pids} ({elapsed:.0f}ms)")
     
-    # Step 2: Find listening ports
+    # Step 2: Find the HTTP/RPC listener candidate for each AGY process.
+    # AGY binds TLS first and its unencrypted HTTP JSON-RPC listener second,
+    # so the HTTP listener is normally the higher port. Never probe a process
+    # until both listeners are present; this avoids sending HTTP to a TLS-only
+    # startup state.
     all_ports = []
+    candidate_ports = []
     for pid in pids:
         ports = _find_listening_ports(pid)
         all_ports.extend(ports)
+        if len(ports) >= 2:
+            candidate_ports.append(max(ports))
     all_ports = sorted(set(all_ports))
+    candidate_ports = sorted(set(candidate_ports), reverse=True)
     
-    if not all_ports:
+    if not candidate_ports:
         if verbose:
-            print("  [AGY API] No listening ports found for agy.exe")
+            print("  [AGY API] HTTP/RPC listener not ready; skipping local probe")
         return None
     
     if verbose:
         elapsed = (time.perf_counter() - t0) * 1000
-        print(f"  [AGY API] Listening ports: {all_ports} ({elapsed:.0f}ms)")
+        print(f"  [AGY API] Listening ports: {all_ports}; HTTP candidates: {candidate_ports} ({elapsed:.0f}ms)")
     
-    # Step 3: Probe ports to find the API endpoint
+    # Step 3: Probe only HTTP/RPC candidates. Never probe the TLS listener.
     working_port = None
     working_scheme = None
     
-    for port in all_ports:
+    for port in candidate_ports:
         scheme = _probe_port(port)
         if scheme:
             working_port = port
@@ -599,14 +608,18 @@ def get_agy_port_info() -> dict:
         return {"running": False, "pids": [], "ports": [], "working_port": None}
     
     all_ports = []
+    candidate_ports = []
     for pid in pids:
         ports = _find_listening_ports(pid)
         all_ports.extend(ports)
+        if len(ports) >= 2:
+            candidate_ports.append(max(ports))
     all_ports = sorted(set(all_ports))
+    candidate_ports = sorted(set(candidate_ports), reverse=True)
     
     working_port = None
     working_scheme = None
-    for port in all_ports:
+    for port in candidate_ports:
         scheme = _probe_port(port)
         if scheme:
             working_port = port
@@ -617,6 +630,7 @@ def get_agy_port_info() -> dict:
         "running": True,
         "pids": pids,
         "ports": all_ports,
+        "http_candidates": candidate_ports,
         "working_port": working_port,
         "working_scheme": working_scheme,
     }

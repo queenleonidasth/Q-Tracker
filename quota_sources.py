@@ -127,7 +127,7 @@ class CodexQuotaSource:
             if fetch_error is not None:
                 return ProviderSnapshot(
                     provider_id="codex",
-                    provider_name="Codex",
+                    provider_name="ChatGPT",
                     windows=fallback.windows,
                     status=self._status_for_error(fetch_error),
                     source=fallback.source,
@@ -142,14 +142,14 @@ class CodexQuotaSource:
         if fetch_error is not None:
             return ProviderSnapshot.failure(
                 "codex",
-                "Codex",
+                "ChatGPT",
                 self._status_for_error(fetch_error),
                 str(fetch_error),
                 error_kind=fetch_error.kind.value,
             )
         return ProviderSnapshot.failure(
             "codex",
-            "Codex",
+            "ChatGPT",
             FetchStatus.UNAVAILABLE,
             "No Codex quota data is available; sign in to Codex and run it once.",
             error_kind=ProviderErrorKind.AUTH_REQUIRED.value,
@@ -197,7 +197,7 @@ class CodexQuotaSource:
             return None
         return ProviderSnapshot(
             provider_id="codex",
-            provider_name="Codex",
+            provider_name="ChatGPT",
             windows=windows,
             status=FetchStatus.OK,
             source="live_api",
@@ -250,7 +250,7 @@ class CodexQuotaSource:
             return None
         return ProviderSnapshot(
             provider_id="codex",
-            provider_name="Codex",
+            provider_name="ChatGPT",
             windows=windows,
             status=status,
             source="session_log",
@@ -289,7 +289,7 @@ class CodexQuotaSource:
 
 
 class AgyQuotaSource:
-    """Read AGY quota from the local language server, the cloud API, or cache."""
+    """Read AGY quota from the cloud API, falling back to cache only."""
 
     def __init__(
         self,
@@ -307,26 +307,22 @@ class AgyQuotaSource:
 
     def fetch(self) -> ProviderSnapshot:
         try:
-            live = self.fetch_live()
-        except Exception:
-            live = None
-        if isinstance(live, dict):
-            return self._from_groups(live, FetchStatus.OK, "local_api", self.now())
-
-        try:
             cloud = self.fetch_cloud()
         except Exception:
             cloud = None
         if isinstance(cloud, dict):
             return self._from_groups(cloud, FetchStatus.OK, "cloud_api", self.now())
 
+        # Do not probe agy.exe localhost listeners. AGY 1.2.17 exposes separate
+        # TLS and HTTP ports, while the legacy local quota RPC no longer returns
+        # usable data. Probing those ports can also make AGY print TLS handshake
+        # errors. The stored-OAuth cloud API plus cache is the stable path.
         if not self.cache_path.exists():
             return ProviderSnapshot.failure(
                 "agy",
                 "Antigravity",
                 FetchStatus.UNAVAILABLE,
-                "Antigravity is not running, the cloud API returned no data, "
-                "and no quota cache exists.",
+                "The Antigravity cloud API returned no data and no quota cache exists.",
                 error_kind=ProviderErrorKind.NOT_RUNNING.value,
             )
         try:

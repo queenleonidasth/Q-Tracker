@@ -17,7 +17,7 @@ from quota_models import (
     apply_monotonic_guard,
     utc_now_iso,
 )
-from quota_sources import AgyQuotaSource, CodexQuotaSource, GeminiQuotaSource
+from quota_sources import AgyQuotaSource, CodexQuotaSource
 from state_store import AtomicStateStore, get_store
 
 
@@ -109,7 +109,7 @@ class UsageService:
                 return existing
             return ProviderSnapshot.failure(
                 provider_id,
-                provider_id.title(),
+                "Antigravity" if provider_id == "agy" else "ChatGPT" if provider_id == "codex" else provider_id.title(),
                 FetchStatus.UNAVAILABLE,
                 "Refresh already in progress",
             )
@@ -131,7 +131,7 @@ class UsageService:
             except Exception as error:
                 incoming = ProviderSnapshot.failure(
                     provider_id,
-                    provider_id.title(),
+                    "Antigravity" if provider_id == "agy" else "ChatGPT" if provider_id == "codex" else provider_id.title(),
                     FetchStatus.ERROR,
                     str(error) or error.__class__.__name__,
                     error_kind=ProviderErrorKind.OTHER.value,
@@ -164,7 +164,7 @@ class UsageService:
         )
         return ProviderSnapshot.failure(
             provider_id,
-            "Antigravity" if provider_id == "agy" else provider_id.title(),
+            "Antigravity" if provider_id == "agy" else "ChatGPT" if provider_id == "codex" else provider_id.title(),
             status,
             str(error),
             error_kind=error.kind.value,
@@ -343,7 +343,7 @@ def get_service() -> UsageService:
             {
                 "agy": AgyQuotaSource(),
                 "codex": CodexQuotaSource(),
-                "gemini": GeminiQuotaSource(),
+                # Gemini intentionally omitted: Q-Tracker runs only AGY + Codex/ChatGPT.
             },
             scanner=CodexUsageScanner(),
         )

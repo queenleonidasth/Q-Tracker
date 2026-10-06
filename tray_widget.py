@@ -113,7 +113,7 @@ class TokenTrayIcon:
         if self.icon is not None:
             self.icon.notify(
                 f"Today {format_tokens(view.token_totals['today'])} · Month {format_tokens(view.token_totals['month'])}",
-                "Codex token usage",
+                "ChatGPT token usage",
             )
 
     def _quit(self, _icon=None, _item=None) -> None:
