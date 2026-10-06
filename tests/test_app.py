@@ -28,40 +28,27 @@ def test_refresh_mode_forces_service_refresh_and_returns_success(capsys):
     assert "codex: ok" in capsys.readouterr().out.lower()
 
 
-def test_dashboard_mode_runs_dashboard_on_calling_thread():
-    """Tk must own the main thread rather than being started by a tray worker."""
-    calls = []
+def test_enable_and_disable_startup_flags(monkeypatch, capsys):
+    startup_calls = []
 
-    class Dashboard:
-        def run(self):
-            calls.append("run")
+    monkeypatch.setattr(
+        "startup.set_startup",
+        lambda enabled, cmd: startup_calls.append((enabled, cmd)),
+    )
+    monkeypatch.setattr(
+        "app_paths.build_startup_command",
+        lambda: ["Q-Tracker.exe"],
+    )
 
-    result = app.main(["--dashboard"], dashboard_factory=lambda: Dashboard())
+    res_enable = app.main(["--enable-startup"])
+    assert res_enable == 0
+    assert startup_calls[-1] == (True, ["Q-Tracker.exe"])
+    assert "windows startup enabled" in capsys.readouterr().out.lower()
 
-    assert result == 0
-    assert calls == ["run"]
-
-
-def test_launch_mode_uses_current_interpreter_without_shell(monkeypatch):
-    """A child window must not rely on Python file association or open a command shell."""
-    captured = {}
-
-    class Process:
-        pass
-
-    def fake_popen(command, **kwargs):
-        captured["command"] = command
-        captured["kwargs"] = kwargs
-        return Process()
-
-    monkeypatch.setattr(app.subprocess, "Popen", fake_popen)
-
-    app.launch_mode("--dashboard")
-
-    assert captured["command"][0] == sys.executable
-    assert captured["command"][-1] == "--dashboard"
-    assert captured["kwargs"]["shell"] is False
-    assert captured["kwargs"]["creationflags"] == app.CREATE_NO_WINDOW
+    res_disable = app.main(["--disable-startup"])
+    assert res_disable == 0
+    assert startup_calls[-1] == (False, [])
+    assert "windows startup disabled" in capsys.readouterr().out.lower()
 
 
 def test_diagnostics_mode_prints_redacted_health_report(tmp_path, monkeypatch, capsys):

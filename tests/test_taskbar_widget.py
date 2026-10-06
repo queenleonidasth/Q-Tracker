@@ -22,6 +22,8 @@ def _runtime(view: TrackerView, ticks: int = 0) -> SimpleNamespace:
         settings=SimpleNamespace(enabled_providers=("agy", "codex")),
         last_position=None,
         overlay_hidden=False,
+        tooltip_hwnd=None,
+        tooltip_text="",
     )
 
 
@@ -78,84 +80,77 @@ def _provider(provider_id: str, name: str, windows: tuple[WindowView, ...]) -> P
     )
 
 
-def test_left_aligned_start_keeps_twelve_pixel_margin():
-    """Fitting content starts twelve pixels inside the left edge."""
-    assert widget._left_aligned_start(client_width=400, content_width=320) == 12
+def test_right_aligned_start_keeps_twelve_pixel_margin():
+    """Fitting content leaves a 12 px margin on the right edge."""
+    assert widget._right_aligned_start(client_width=400, content_width=320) == 68
 
 
-def test_left_aligned_start_uses_full_width_for_overflow():
-    """Overflowing content starts at zero so useful text is not clipped twice."""
-    assert widget._left_aligned_start(client_width=400, content_width=410) == 0
+def test_right_aligned_start_falls_back_to_left_margin_for_overflow():
+    """Overflowing content preserves a 10 px floor so leading text stays readable."""
+    assert widget._right_aligned_start(client_width=400, content_width=410) == 10
 
 
-def test_horizontal_position_uses_left_taskbar_margin():
-    """The overlay is anchored to the left side instead of the system tray."""
-    assert widget._taskbar_overlay_position((0, 1032, 1920, 1080), 460) == (
-        12,
-        1032,
-        460,
-        48,
-    )
-
-
-def test_horizontal_position_stays_before_centered_primary_controls():
-    """Centered Start/task buttons define a clean right edge for the left region."""
+def test_horizontal_position_uses_notification_area_boundary():
+    """The overlay sits immediately to the left of the notification area."""
     assert widget._taskbar_overlay_position(
-        (0, 1032, 1920, 1080),
+        (0, 1392, 3440, 1440),
         460,
-        (1695, 1032, 1920, 1080),
-        primary_bounds=(717, 1032, 1114, 1080),
-    ) == (12, 1032, 460, 48)
-
-
-def test_horizontal_position_clamps_before_centered_primary_controls():
-    """Long content shrinks before it can overlap centered taskbar buttons."""
-    assert widget._taskbar_overlay_position(
-        (0, 1032, 1920, 1080),
-        460,
-        (1695, 1032, 1920, 1080),
-        desired_width=700,
-        primary_bounds=(600, 1032, 1114, 1080),
-    ) == (12, 1032, 568, 48)
-
-
-def test_horizontal_position_moves_after_left_aligned_primary_controls():
-    """Left-aligned Windows layouts fall back to the space after task buttons."""
-    assert widget._taskbar_overlay_position(
-        (0, 1032, 1920, 1080),
-        460,
-        (1695, 1032, 1920, 1080),
-        primary_bounds=(0, 1032, 900, 1080),
-    ) == (920, 1032, 460, 48)
+        (3169, 1392, 3440, 1440),
+    ) == (2701, 1392, 460, 48)
 
 
 def test_horizontal_position_clamps_width_before_narrow_notification_area():
-    """A narrow left band shrinks the child instead of crossing the tray."""
+    """A narrow remaining band shrinks the child instead of crossing the tray."""
     position = widget._taskbar_overlay_position(
         (0, 1392, 600, 1440),
         460,
         (300, 1392, 600, 1440),
     )
 
-    assert position == (12, 1392, 240, 48)
+    assert position == (12, 1392, 280, 48)
 
 
-def test_horizontal_position_keeps_left_margin_without_notification_area():
-    """Explorer transitions retain the deterministic left anchor."""
+def test_taskbar_overlay_adapts_to_primary_and_notification_bounds():
+    """The overlay follows the tray while avoiding task buttons as either side grows."""
+    taskbar = (0, 1032, 1920, 1080)
+    primary = (850, 1032, 1100, 1080)
+
+    near_tray = widget._taskbar_overlay_position(
+        taskbar,
+        460,
+        notification_bounds=(1660, 1032, 1920, 1080),
+        desired_width=460,
+        primary_bounds=primary,
+    )
+    expanded_tray = widget._taskbar_overlay_position(
+        taskbar,
+        460,
+        notification_bounds=(1400, 1032, 1920, 1080),
+        desired_width=460,
+        primary_bounds=primary,
+    )
+
+    assert near_tray == (1192, 1032, 460, 48)
+    assert expanded_tray == (370, 1032, 460, 48)
+    assert expanded_tray[0] + expanded_tray[2] <= primary[0] - widget.TASKBAR_PRIMARY_GAP
+
+
+def test_horizontal_position_keeps_fixed_reserve_without_notification_area():
+    """Explorer transitions retain a 230 px tray reserve on the right."""
     assert widget._taskbar_overlay_position(
         (0, 1032, 1920, 1080),
         460,
         None,
-    ) == (12, 1032, 460, 48)
+    ) == (1230, 1032, 460, 48)
 
 
 def test_horizontal_position_ignores_notification_area_outside_taskbar():
-    """A rectangle extending beyond the taskbar cannot override the left anchor."""
+    """A rectangle extending beyond the taskbar cannot override the right anchor."""
     assert widget._taskbar_overlay_position(
         (0, 1032, 1920, 1080),
         460,
         (1500, 1032, 2500, 1080),
-    ) == (12, 1032, 460, 48)
+    ) == (1230, 1032, 460, 48)
 
 
 def test_notification_area_bounds_discovers_visible_tray_notify_window(monkeypatch):
@@ -215,7 +210,7 @@ def test_reposition_skips_unchanged_valid_position(monkeypatch):
     """Repeated display notifications must not move an already-correct overlay."""
     runtime = _runtime(_view("test"))
     runtime.settings.display = {"width": 460}
-    runtime.last_position = (12, 0, 460, 48)
+    runtime.last_position = (1230, 0, 460, 48)
 
     monkeypatch.setattr(
         widget,
@@ -265,7 +260,7 @@ def test_reposition_uses_taskbar_client_coordinates(monkeypatch):
         (
             100,
             None,
-            12,
+            1230,
             0,
             460,
             48,
@@ -302,7 +297,7 @@ def test_reposition_uses_current_taskbar_client_size_after_resolution_change(mon
         (
             100,
             None,
-            12,
+            1870,
             0,
             460,
             64,
@@ -349,7 +344,7 @@ def test_reposition_uses_dynamic_notification_boundary_in_client_coordinates(mon
         (
             100,
             None,
-            12,
+            1101,
             0,
             460,
             48,
@@ -773,7 +768,7 @@ def test_render_segments_preserve_compact_provider_text_order():
         "W",
     ]
     assert segments[1].text == "91%"
-    assert segments[1].gap_after == 4
+    assert segments[5].gap_after == 10
     assert segments[-1].gap_after == 0
 
 
@@ -785,8 +780,8 @@ def test_render_segments_include_waiting_text_without_providers():
     assert segments[0].gap_after == 0
 
 
-def test_render_segments_show_reset_countdown_for_each_quota():
-    """Each taskbar quota must carry its own time-to-reset next to the percentage."""
+def test_render_segments_show_reset_countdown_only_for_low_quota():
+    """A low quota carries its time-to-reset; a healthy one stays a bare percentage."""
     view = TrackerView(
         providers=(
             _provider(
@@ -794,8 +789,8 @@ def test_render_segments_show_reset_countdown_for_each_quota():
                 "Antigravity",
                 (
                     WindowView(
-                        "session", "5H", "5H", 91.0, 9.0,
-                        "2026-08-22T14:09:17Z", "1h 57m", "normal",
+                        "session", "5H", "5H", 12.0, 88.0,
+                        "2026-08-22T14:09:17Z", "1h 57m", "warning",
                     ),
                     WindowView(
                         "weekly", "W", "W", 94.0, 6.0,
@@ -812,15 +807,13 @@ def test_render_segments_show_reset_countdown_for_each_quota():
 
     assert [segment.text for segment in segments] == [
         "Antigravity",
-        "91%",
+        "12%",
         "5H",
         "·1h57m",
         "·",
         "94%",
         "W",
-        "·3d23h",
     ]
-    assert segments[1].text == "91%"
     assert segments[-1].gap_after == 0
 
 
@@ -833,8 +826,8 @@ def test_render_segments_can_omit_reset_countdowns():
                 "Antigravity",
                 (
                     WindowView(
-                        "session", "5H", "5H", 91.0, 9.0,
-                        "2026-08-22T14:09:17Z", "1h 57m", "normal",
+                        "session", "5H", "5H", 9.0, 91.0,
+                        "2026-08-22T14:09:17Z", "1h 57m", "critical",
                     ),
                 ),
             ),
@@ -847,7 +840,7 @@ def test_render_segments_can_omit_reset_countdowns():
         view, {"agy": {"color": "#35C2FF"}}, include_countdown=False
     )
 
-    assert [segment.text for segment in segments] == ["Antigravity", "91%", "5H"]
+    assert [segment.text for segment in segments] == ["Antigravity", "9%", "5H"]
 
 
 def test_overlay_position_shrinks_to_desired_content_width():
@@ -856,7 +849,7 @@ def test_overlay_position_shrinks_to_desired_content_width():
         (0, 1032, 1920, 1080),
         460,
         desired_width=300,
-    ) == (12, 1032, 300, 48)
+    ) == (1390, 1032, 300, 48)
 
 
 def test_overlay_position_clamps_desired_width_and_keeps_floor():
@@ -865,12 +858,12 @@ def test_overlay_position_clamps_desired_width_and_keeps_floor():
         (0, 1032, 1920, 1080),
         460,
         desired_width=5_000,
-    ) == (12, 1032, 720, 48)
+    ) == (970, 1032, 720, 48)
     assert widget._taskbar_overlay_position(
         (0, 1032, 1920, 1080),
         460,
         desired_width=100,
-    ) == (12, 1032, 240, 48)
+    ) == (1450, 1032, 240, 48)
     narrow = widget._taskbar_overlay_position(
         (0, 1032, 800, 1080),
         460,
@@ -878,6 +871,7 @@ def test_overlay_position_clamps_desired_width_and_keeps_floor():
     )
 
     assert narrow[2] == min(720, 500)
+    assert narrow[0] == 70
 
 
 def test_reposition_flags_compact_when_content_exceeds_space(monkeypatch):
@@ -903,7 +897,7 @@ def test_reposition_flags_compact_when_content_exceeds_space(monkeypatch):
 
     assert widget._reposition(100) is True
     assert runtime.compact_countdowns is True
-    assert set_position_calls[0][2:6] == (12, 0, 720, 48)
+    assert set_position_calls[0][2:6] == (970, 0, 720, 48)
 
 
 def test_reposition_keeps_full_mode_when_content_fits(monkeypatch):
@@ -929,7 +923,7 @@ def test_reposition_keeps_full_mode_when_content_fits(monkeypatch):
 
     assert widget._reposition(100) is True
     assert runtime.compact_countdowns is False
-    assert set_position_calls[0][2:6] == (12, 0, 460, 48)
+    assert set_position_calls[0][2:6] == (1230, 0, 460, 48)
 
 
 def test_shell_timer_rechecks_geometry_without_moving_unchanged_window(monkeypatch):
@@ -1257,16 +1251,20 @@ def test_render_segments_include_both_codex_windows():
     )
 
     segments = widget._render_segments(view, {"codex": {"color": "#7FE36A"}})
-    texts = "".join(segment.text for segment in segments)
+    texts = [segment.text for segment in segments]
 
-    assert "Codex" in texts
-    assert "90%" in texts and "5H" in texts
-    assert "80%" in texts and "W" in texts
+    assert texts == ["Codex", "90%", "5H", "·", "80%", "W"]
 
 
 def test_compact_mode_drops_countdowns_before_dropping_codex_windows():
     """Space pressure removes countdown suffixes first, never a whole window."""
-    view = _codex_view_with_both_windows()
+    session = WindowView("session", "5H", "5H", 15.0, 85.0, None, "2h 30m", "warning")
+    weekly = WindowView("weekly", "Weekly", "W", 8.0, 92.0, None, "6d 2h", "critical")
+    view = TrackerView(
+        providers=(_provider("codex", "Codex", (session, weekly)),),
+        compact_text="",
+        token_totals={},
+    )
 
     full = widget._render_segments(view, {}, include_countdown=True)
     compact = widget._render_segments(view, {}, include_countdown=False)
@@ -1274,9 +1272,19 @@ def test_compact_mode_drops_countdowns_before_dropping_codex_windows():
     full_texts = "".join(segment.text for segment in full)
     compact_texts = "".join(segment.text for segment in compact)
     assert "·2h30m" in full_texts and "·6d2h" in full_texts
-    for label in ("90%", "5H", "80%", "W"):
+    for label in ("15%", "8%"):
         assert label in compact_texts
     assert "·2h30m" not in compact_texts and "·6d2h" not in compact_texts
+
+
+def test_render_segments_hide_countdown_for_healthy_quota():
+    """Reset time only appears once a quota is low enough to matter."""
+    texts = "".join(
+        segment.text for segment in widget._render_segments(_codex_view_with_both_windows(), {})
+    )
+
+    assert "90%" in texts and "80%" in texts
+    assert "2h30m" not in texts and "6d2h" not in texts
 
 
 def test_render_segments_honors_configured_window_map():
@@ -1484,3 +1492,280 @@ def test_create_window_retries_when_taskbar_has_zero_geometry(monkeypatch):
 
     assert widget._create_window(max_retries=1, retry_delay=0) is False
     assert create_calls == []
+
+
+def test_format_tooltip_text_empty_view():
+    """Empty tracker view returns waiting message."""
+    view = widget.TrackerView(providers=(), compact_text="", token_totals={})
+    text = widget.format_tooltip_text(view)
+    assert "Waiting for provider quota data" in text
+
+
+def test_format_tooltip_text_all_providers_and_resets():
+    """Tooltip text contains all provider names, quota windows, and reset times."""
+    view = widget.TrackerView(
+        providers=(
+            _provider(
+                "agy",
+                "Antigravity",
+                (
+                    WindowView(
+                        "session", "Gemini 5H", "5H", 84.0, 16.0,
+                        "2026-10-06T12:33:48Z", "4h 26m", "normal",
+                    ),
+                    WindowView(
+                        "weekly", "Gemini Weekly", "W", 90.0, 10.0,
+                        "2026-10-08T01:53:07Z", "1d 17h", "normal",
+                    ),
+                ),
+            ),
+            _provider(
+                "codex",
+                "ChatGPT",
+                (
+                    WindowView(
+                        "session", "5H", "5H", 98.0, 2.0,
+                        "2026-10-06T08:13:55Z", "6m", "normal",
+                    ),
+                    WindowView(
+                        "weekly", "Weekly", "W", 100.0, 0.0,
+                        "2026-10-13T06:16:24Z", "6d 22h", "normal",
+                    ),
+                ),
+            ),
+        ),
+        compact_text="",
+        token_totals={},
+    )
+    text = widget.format_tooltip_text(view)
+    assert "Antigravity:" in text
+    assert "Gemini 5H: 84% left · Resets in 4h 26m" in text
+    assert "Gemini Weekly: 90% left · Resets in 1d 17h" in text
+    assert "ChatGPT:" in text
+    assert "5H: 98% left · Resets in 6m" in text
+    assert "Weekly: 100% left · Resets in 6d 22h" in text
+
+
+def test_update_tooltip_refreshes_custom_flyout(monkeypatch):
+    """_update_tooltip repaints and repositions an active custom hover flyout."""
+    invalidated = []
+    shown = []
+    view = widget.TrackerView(
+        providers=(
+            _provider(
+                "agy",
+                "Antigravity",
+                (
+                    WindowView("session", "5H", "5H", 80.0, 20.0, None, "2h", "normal"),
+                ),
+            ),
+        ),
+        compact_text="",
+        token_totals={},
+    )
+    runtime = _runtime(view)
+    runtime.hwnd = 100
+    runtime.popup_hwnd = 200
+    runtime.tooltip_active = True
+    runtime.tooltip_text = ""
+    runtime.tooltip_toolinfo = None
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            InvalidateRect=lambda *args: invalidated.append(args) or 1,
+            GetWindowRect=lambda _hwnd, rect: (
+                setattr(rect._obj, "left", 1400)
+                or setattr(rect._obj, "top", 1032)
+                or setattr(rect._obj, "right", 1700)
+                or setattr(rect._obj, "bottom", 1080)
+                or 1
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        widget,
+        "_show_flyout",
+        lambda hwnd, rect: shown.append((hwnd, rect.left, rect.top)),
+    )
+
+    widget._update_tooltip()
+
+    assert "Antigravity:" in runtime.tooltip_text
+    assert invalidated == [(200, None, 0)]
+    assert shown == [(100, 1400, 1032)]
+
+
+def test_sync_tooltip_hover_activates_flyout(monkeypatch):
+    """A sustained hover shows the translucent custom flyout without activation."""
+    positioned = []
+    shown = []
+    invalidated = []
+    alpha_calls = []
+
+    runtime = _runtime(_view("test"))
+    runtime.hwnd = 100
+    runtime.popup_hwnd = 200
+    runtime.tooltip_toolinfo = None
+    runtime.hover_ticks = 44
+    runtime.tooltip_active = False
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    monkeypatch.setattr(widget, "_monitor_for_window", lambda *_: None)
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            GetCursorPos=lambda pt: setattr(pt._obj, "x", 1500) or setattr(pt._obj, "y", 1050) or 1,
+            GetWindowRect=lambda hwnd, rect: (
+                setattr(rect._obj, "left", 1400)
+                or setattr(rect._obj, "top", 1032)
+                or setattr(rect._obj, "right", 1700)
+                or setattr(rect._obj, "bottom", 1080)
+                or 1
+            ),
+            SetWindowPos=lambda *args: positioned.append(args) or 1,
+            ShowWindow=lambda *args: shown.append(args) or 1,
+            InvalidateRect=lambda *args: invalidated.append(args) or 1,
+            UpdateWindow=lambda *_: 1,
+            SetLayeredWindowAttributes=lambda *args: alpha_calls.append(args) or 1,
+            GetDC=lambda *_: 0,
+            ReleaseDC=lambda *_: 1,
+        ),
+    )
+
+    widget._sync_tooltip_hover(100)
+
+    assert runtime.tooltip_active is True
+    assert positioned and positioned[0][0] == 200
+    assert positioned[0][-1] == (widget.SWP_NOACTIVATE | widget.SWP_SHOWWINDOW)
+    assert shown == [(200, widget.SW_SHOWNOACTIVATE)]
+    assert invalidated == [(200, None, 0)]
+    assert alpha_calls[-1][2:] == (widget.FLYOUT_ALPHA, widget.LWA_ALPHA)
+
+
+def test_sync_tooltip_hover_waits_before_showing_tooltip(monkeypatch):
+    """A brief pointer pass does not flash the hover details immediately."""
+    sent_messages = []
+    runtime = _runtime(_view("test"))
+    runtime.hwnd = 100
+    runtime.popup_hwnd = 200
+    runtime.tooltip_toolinfo = widget.TOOLINFOW()
+    runtime.hover_ticks = 1
+    runtime.tooltip_active = False
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            GetCursorPos=lambda pt: setattr(pt._obj, "x", 1500) or setattr(pt._obj, "y", 1050) or 1,
+            GetWindowRect=lambda hwnd, rect: (
+                setattr(rect._obj, "left", 1400)
+                or setattr(rect._obj, "top", 1032)
+                or setattr(rect._obj, "right", 1700)
+                or setattr(rect._obj, "bottom", 1080)
+                or 1
+            ),
+            SendMessageW=lambda *args: sent_messages.append(args) or 1,
+            GetDC=lambda *_: 0,
+        ),
+    )
+
+    widget._sync_tooltip_hover(100)
+
+    assert runtime.tooltip_active is False
+    assert runtime.hover_ticks == 2
+    assert sent_messages == []
+
+
+def test_init_tooltip_uses_custom_translucent_flyout(monkeypatch):
+    """Hover details use a non-activating layered custom shell-style flyout."""
+    create_calls = []
+    effects = []
+
+    runtime = _runtime(_view("test"))
+    runtime.hwnd = 100
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    monkeypatch.setattr(widget, "k32", SimpleNamespace(GetModuleHandleW=lambda *_: 11))
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            LoadCursorW=lambda *_: 33,
+            RegisterClassExW=lambda *_: 1,
+            GetParent=lambda *_: 99,
+            CreateWindowExW=lambda *args: create_calls.append(args) or 200,
+        ),
+    )
+    monkeypatch.setattr(
+        widget,
+        "_apply_flyout_visual_effects",
+        lambda hwnd: effects.append(hwnd) or True,
+    )
+
+    widget._init_tooltip(100)
+
+    assert create_calls[0][1] == "QTrackerHoverFlyoutV2"
+    ex_style = create_calls[0][0]
+    assert ex_style & widget.WS_EX_LAYERED
+    assert ex_style & widget.WS_EX_NOACTIVATE
+    assert ex_style & widget.WS_EX_TOPMOST
+    assert ex_style & widget.WS_EX_TRANSPARENT
+    assert create_calls[0][2] is None
+    assert create_calls[0][3] == widget.WS_POPUP
+    assert create_calls[0][8] == 99
+    assert effects == [200]
+    assert runtime.popup_hwnd == 200
+    assert runtime.tooltip_hwnd == 200
+    assert runtime.tooltip_toolinfo is None
+    assert runtime.tooltip_active is False
+    assert "Q-Tracker" in runtime.tooltip_text
+
+
+def test_build_flyout_lines_highlights_each_imminent_reset():
+    """Reset details within an hour get a bold accent; distant ones stay normal."""
+    view = widget.TrackerView(
+        providers=(
+            _provider(
+                "codex",
+                "ChatGPT",
+                (
+                    WindowView("session", "5H", "5H", 80.0, 20.0, None, "6m", "normal"),
+                    WindowView("weekly", "Weekly", "W", 95.0, 5.0, None, "6d 22h", "normal"),
+                ),
+            ),
+        ),
+        compact_text="",
+        token_totals={},
+    )
+
+    lines = widget._build_flyout_lines(view, {})
+    imminent = next(line for line in lines if "5H: 80%" in line.text)
+    distant = next(line for line in lines if "Weekly: 95%" in line.text)
+
+    assert imminent.is_bold is True
+    assert imminent.is_highlighted is True
+    assert distant.is_bold is False
+    assert distant.is_highlighted is False
+
+
+def test_native_tooltip_custom_draw_replaces_item_text(monkeypatch):
+    """The native tooltip keeps its shell chrome while custom rows can be emphasized."""
+    runtime = _runtime(_view("test"))
+    runtime.tooltip_hwnd = 200
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    drawn = []
+    monkeypatch.setattr(widget, "_draw_tooltip_content", lambda hdc, rect: drawn.append((hdc, rect)))
+    draw = widget.NMTTCUSTOMDRAW()
+    draw.nmcd.hdr.hwndFrom = 200
+    draw.nmcd.hdr.code = widget.NM_CUSTOMDRAW
+    draw.nmcd.dwDrawStage = widget.CDDS_PREPAINT
+    draw.nmcd.hdc = 300
+    draw.nmcd.rc = widget.wintypes.RECT(0, 0, 420, 160)
+    pointer = widget.ctypes.addressof(draw)
+
+    assert widget._wnd_proc(widget.HWND(100), widget.WM_NOTIFY, 0, pointer) == widget.CDRF_NOTIFYITEMDRAW
+    draw.nmcd.dwDrawStage = widget.CDDS_ITEMPREPAINT
+    assert widget._wnd_proc(widget.HWND(100), widget.WM_NOTIFY, 0, pointer) == widget.CDRF_SKIPDEFAULT
+    assert drawn[0][0] == 300
+    assert (drawn[0][1].left, drawn[0][1].top, drawn[0][1].right, drawn[0][1].bottom) == (0, 0, 420, 160)

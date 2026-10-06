@@ -111,6 +111,53 @@ def context_detail_lines(view: TrackerView) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def _format_window_reset_detail(window: WindowView, now: Optional[datetime] = None) -> str:
+    if not window.reset_in or window.reset_in in ("—", "-"):
+        return "No scheduled reset"
+    if window.reset_in == "now":
+        return "Resets now"
+
+    time_str = ""
+    if window.reset_at:
+        dt = _parse_timestamp(window.reset_at)
+        if dt is not None:
+            try:
+                local_dt = dt.astimezone()
+                reference = now or datetime.now().astimezone()
+                fmt = "%H:%M" if local_dt.date() == reference.date() else "%b %d, %H:%M"
+                time_str = f" ({local_dt.strftime(fmt)})"
+            except Exception:
+                pass
+
+    return f"Resets in {window.reset_in}{time_str}"
+
+
+def format_tooltip_text(view: TrackerView) -> str:
+    """Format full quota status and reset times across all providers for hover tooltips."""
+    if not view.providers:
+        return "Q-Tracker\nWaiting for provider quota data..."
+
+    lines: list[str] = ["Q-Tracker — Quotas & Reset Times\n"]
+    for idx, provider in enumerate(view.providers):
+        name = provider.display_name or provider.provider_id.title()
+        status_suffix = ""
+        if provider.status == "stale":
+            status_suffix = " (stale)"
+        elif provider.status not in ("ok", ""):
+            status_suffix = f" ({provider.status})"
+        lines.append(f"{name}{status_suffix}:")
+        if not provider.windows:
+            lines.append("  • No active quota windows")
+        else:
+            for window in provider.windows:
+                detail = _format_window_reset_detail(window)
+                lines.append(f"  • {window.label}: {window.remaining_percent:.0f}% left · {detail}")
+        if idx < len(view.providers) - 1:
+            lines.append("")
+
+    return "\n".join(lines)
+
+
 def _parse_timestamp(value: Any) -> Optional[datetime]:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -216,6 +263,21 @@ def countdown_suffix(reset_in: Any) -> str:
     if not text or text in {"-", "—"}:
         return ""
     return f"·{text.replace(' ', '')}"
+
+
+def is_reset_imminent(reset_in: Any, threshold_seconds: int = 3_600) -> bool:
+    """Return whether a countdown is at or below the imminent-reset threshold."""
+    text = str(reset_in or "").strip().lower()
+    if text == "now":
+        return True
+    if not text or text in {"-", "—"}:
+        return False
+    unit_seconds = {"d": 86_400, "h": 3_600, "m": 60, "s": 1}
+    parts = re.findall(r"(\d+)\s*([dhms])", text)
+    if not parts:
+        return False
+    seconds = sum(int(amount) * unit_seconds[unit] for amount, unit in parts)
+    return seconds <= max(0, int(threshold_seconds))
 
 
 def build_provider_view(snapshot: dict[str, Any], now: Optional[datetime] = None) -> ProviderView:

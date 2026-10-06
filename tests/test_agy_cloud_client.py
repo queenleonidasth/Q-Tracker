@@ -60,14 +60,16 @@ def test_aggregate_merges_models_by_family_with_binding_minimum():
 
     groups = aggregate_model_quota(models, now=NOW)
 
-    assert set(groups) == {"gemini", "3p"}
+    assert set(groups) == {"gemini", "claude", "gpt"}
     assert groups["gemini"]["remaining_percent"] == 40.0
     assert groups["gemini"]["remaining_fraction"] == 0.4
     assert groups["gemini"]["label"] == "Gemini"
     assert groups["gemini"]["reset_time"] == "2026-08-22T14:09:17Z"
     assert groups["gemini"]["reset_in_seconds"] == 2 * 3600 + 9 * 60 + 17
-    assert groups["3p"]["remaining_percent"] == 70.0
-    assert groups["3p"]["label"] == "Claude & GPT"
+    assert groups["claude"]["remaining_percent"] == 100.0
+    assert groups["claude"]["label"] == "Claude"
+    assert groups["gpt"]["remaining_percent"] == 70.0
+    assert groups["gpt"]["label"] == "GPT-OSS"
 
 
 def test_aggregate_skips_internal_and_quotaless_entries():
@@ -160,18 +162,41 @@ def test_fetch_from_cloud_happy_path_writes_cache(monkeypatch, tmp_path):
 
     monkeypatch.setattr(agy_cloud_client, "fetch_quota_summary", fake_summary)
 
-    def fail_models(*args, **kwargs):
-        raise AssertionError("models fallback must not run when summary succeeds")
+    def fake_models(access_token, timeout=agy_cloud_client.REQUEST_TIMEOUT):
+        calls["models_token"] = access_token
+        return 200, {
+            "claude-sonnet-4-6": {
+                "quotaInfo": {
+                    "remainingFraction": 0.25,
+                    "resetTime": "2026-08-22T16:36:57Z",
+                }
+            },
+            "gpt-oss-120b-medium": {
+                "quotaInfo": {
+                    "remainingFraction": 0.25,
+                    "resetTime": "2026-08-22T16:36:57Z",
+                }
+            },
+        }
 
-    monkeypatch.setattr(agy_cloud_client, "fetch_available_models", fail_models)
+    monkeypatch.setattr(agy_cloud_client, "fetch_available_models", fake_models)
     written = {}
     monkeypatch.setattr(agy_cloud_client, "_write_cache", lambda data: written.update(data))
 
     result = fetch_from_cloud()
 
-    assert calls == {"access_token": "ya29.valid", "endpoint": "summary"}
-    assert set(result["groups"]) == {"gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"}
+    assert calls == {
+        "access_token": "ya29.valid",
+        "endpoint": "summary",
+        "models_token": "ya29.valid",
+    }
+    assert set(result["groups"]) == {"gemini-5h", "gemini-weekly", "claude", "gpt"}
     assert result["groups"]["gemini-5h"]["remaining_percent"] == 97.6
+    assert result["groups"]["claude"]["remaining_percent"] == 25.0
+    assert result["groups"]["claude"]["label"] == "Claude"
+    assert result["groups"]["gpt"]["remaining_percent"] == 25.0
+    assert "3p-5h" not in result["groups"]
+    assert "3p-weekly" not in result["groups"]
     assert result["model"] == "AGY (cloud API)"
     assert written.get("groups") == result["groups"]
 
@@ -214,9 +239,10 @@ def test_fetch_from_cloud_falls_back_to_models_endpoint(monkeypatch):
     result = fetch_from_cloud()
 
     assert endpoints == ["models"]
-    assert set(result["groups"]) == {"gemini", "3p"}
+    assert set(result["groups"]) == {"gemini", "claude"}
     assert result["groups"]["gemini"]["remaining_percent"] == 50.0
-    assert result["groups"]["3p"]["remaining_percent"] == 25.0
+    assert result["groups"]["claude"]["remaining_percent"] == 25.0
+    assert result["groups"]["claude"]["label"] == "Claude"
 
 
 def test_fetch_from_cloud_refreshes_expired_token(monkeypatch):

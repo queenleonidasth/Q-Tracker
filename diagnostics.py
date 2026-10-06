@@ -56,6 +56,9 @@ def configure_logging(directory: Path | None = None) -> logging.Logger:
         logging.Formatter("%(asctime)s %(levelname)s %(threadName)s %(message)s")
     )
     logger.addHandler(handler)
+    tw_logger = logging.getLogger("taskbar_widget")
+    tw_logger.setLevel(logging.INFO)
+    tw_logger.addHandler(handler)
     return logger
 
 
@@ -108,7 +111,7 @@ def collect_diagnostics(settings: Settings, state: dict[str, Any]) -> dict[str, 
     return {
         "application": {
             "name": "Q-Tracker",
-            "version": "1.4.0",
+            "version": "1.6.0",
             "frozen": is_frozen(),
         },
         "runtime": {

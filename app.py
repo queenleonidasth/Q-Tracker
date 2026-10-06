@@ -1,38 +1,21 @@
-"""Unified entry point for taskbar, dashboard and command-line refresh modes."""
+"""Entry point: the taskbar readout, plus command-line refresh/diagnostics modes."""
 
 from __future__ import annotations
 
 import argparse
-import subprocess
 import threading
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
-from app_paths import build_child_command, runtime_dir, settings_path
+from app_paths import runtime_dir, settings_path
 from instance_guard import SingleInstanceGuard
 from settings import Settings
 from state_store import get_store
 from usage_service import RefreshScheduler, get_service
 
 
-CREATE_NO_WINDOW = 0x08000000
-
-
-def launch_mode(mode: str):
-    return subprocess.Popen(
-        build_child_command(mode),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=CREATE_NO_WINDOW,
-        close_fds=True,
-        shell=False,
-    )
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AI quota and token usage tracker")
     modes = parser.add_mutually_exclusive_group()
-    modes.add_argument("--dashboard", action="store_true", help="open the full dashboard")
     modes.add_argument("--refresh", action="store_true", help="refresh provider state once")
     modes.add_argument("--diagnostics", action="store_true", help="print a redacted health report")
     modes.add_argument("--enable-startup", action="store_true", help="enable HKCU startup entry")
@@ -44,7 +27,6 @@ def main(
     argv: Optional[list[str]] = None,
     *,
     service: Any = None,
-    dashboard_factory: Optional[Callable[[], Any]] = None,
 ) -> int:
     args = _parser().parse_args(argv)
     active_service = service or get_service()
@@ -78,23 +60,13 @@ def main(
             print(f"{provider_id}: {snapshot.status.value} ({snapshot.source or 'no source'})")
         return 0
 
-    if args.dashboard:
-        if dashboard_factory is None:
-            from dashboard import Dashboard
-
-            store = get_store()
-            settings = Settings.load(settings_path())
-            dashboard_factory = lambda: Dashboard(store, active_service, settings)
-        dashboard_factory().run()
-        return 0
-
     return _run_default(active_service)
 
 
 def _run_default(service: Any) -> int:
+    from alerts import QuotaAlerts
     from diagnostics import configure_logging
-    from taskbar_widget import request_close, run_taskbar
-    from tray_widget import TokenTrayIcon
+    from taskbar_widget import run_taskbar
 
     settings = Settings.load(settings_path())
     store = get_store()
@@ -105,13 +77,7 @@ def _run_default(service: Any) -> int:
         return 0
 
     scheduler = RefreshScheduler(service, settings.refresh_interval_seconds)
-    tray = TokenTrayIcon(
-        store=store,
-        service=service,
-        settings=settings,
-        on_open=lambda: launch_mode("--dashboard"),
-        on_exit=request_close,
-    )
+    alerts = QuotaAlerts(store, settings)
 
     def refresh() -> None:
         threading.Thread(
@@ -122,18 +88,23 @@ def _run_default(service: Any) -> int:
         ).start()
 
     try:
-        logger.info("Starting taskbar, tray, and refresh scheduler")
+        logger.info("Starting taskbar and refresh scheduler")
         scheduler.start()
-        tray.start_detached()
-        return run_taskbar(
+        alerts.start()
+        ret = run_taskbar(
             store=store,
             settings=settings,
-            on_open=lambda: launch_mode("--dashboard"),
+            on_open=refresh,
             on_refresh=refresh,
         )
+        logger.info("run_taskbar returned %s", ret)
+        return ret
+    except Exception:
+        logger.exception("Fatal error in tracker execution")
+        raise
     finally:
         scheduler.stop()
-        tray.stop()
+        alerts.stop()
         guard.release()
         logger.info("Tracker stopped")
 

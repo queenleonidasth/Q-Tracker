@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wintypes
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 from settings import Settings
 from state_store import AtomicStateStore
@@ -19,8 +22,11 @@ from ui_models import (
     build_tracker_view,
     context_detail_lines,
     countdown_suffix,
+    format_tooltip_text,
+    is_reset_imminent,
     taskbar_overlay_width,
     taskbar_windows,
+    _format_window_reset_detail,
 )
 
 
@@ -60,16 +66,27 @@ WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_LAYERED = 0x00080000
 WS_EX_TOPMOST = 0x00000008
 WS_EX_NOACTIVATE = 0x08000000
+WS_EX_TRANSPARENT = 0x00000020
+
+CS_DROPSHADOW = 0x00020000
+DT_NOPREFIX = 0x0800
+FW_NORMAL = 400
+FW_BOLD = 700
 
 WM_DESTROY = 0x0002
 WM_PAINT = 0x000F
 WM_CLOSE = 0x0010
 WM_ERASEBKGND = 0x0014
+WM_NOTIFY = 0x004E
 WM_SETTINGCHANGE = 0x001A
 WM_DISPLAYCHANGE = 0x007E
 WM_TIMER = 0x0113
-WM_RBUTTONDOWN = 0x0204
+WM_MOUSEMOVE = 0x0200
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP = 0x0202
 WM_LBUTTONDBLCLK = 0x0203
+WM_RBUTTONDOWN = 0x0204
+WM_RBUTTONUP = 0x0205
 WM_DPICHANGED = 0x02E0
 WM_SHELL_ZORDER_REPAIR = 0x8001
 EVENT_SYSTEM_FOREGROUND = 0x0003
@@ -89,20 +106,27 @@ SWP_NOACTIVATE = 0x0010
 SWP_NOZORDER = 0x0004
 SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
+SWP_SHOWWINDOW = 0x0040
 SW_HIDE = 0
 SW_SHOWNOACTIVATE = 4
 HWND_TOP = 0
 LWA_COLORKEY = 0x00000001
+LWA_ALPHA = 0x00000002
+TOOLTIP_ALPHA = 210
+FLYOUT_ALPHA = 228
+FLYOUT_CORNER_RADIUS = 14
 TPM_RETURNCMD = 0x0100
 MF_STRING = 0x0000
 MF_SEPARATOR = 0x0800
 MF_GRAYED = 0x0001
+MF_CHECKED = 0x0008
 FW_BOLD = 700
 DEFAULT_CHARSET = 1
 ANTIALIASED_QUALITY = 4
 COLORKEY_RGB = 0x00010101
 TASKBAR_NOTIFICATION_CLASS = "TrayNotifyWnd"
-TASKBAR_NOTIFICATION_GAP = 12
+TASKBAR_NOTIFICATION_GAP = 8
+TASKBAR_RIGHT_RESERVE = 230
 TASKBAR_LEFT_MARGIN = 12
 TASKBAR_PRIMARY_GAP = 20
 TASKBAR_PRIMARY_CLASSES = frozenset({"Start", "MSTaskListWClass", "MSTaskSwWClass", "ReBarWindow32"})
@@ -112,6 +136,7 @@ MIN_AUTO_WIDTH = 240
 DATA_REFRESH_TIMER_ID = 1
 SHELL_SYNC_TIMER_ID = 2
 SHELL_SYNC_INTERVAL_MS = 10
+TOOLTIP_HOVER_DELAY_MS = 450
 SHELL_RECONNECT_INTERVAL_MS = 2_000
 GW_HWNDPREV = 3
 HWND_TOPMOST = -1
@@ -119,6 +144,7 @@ u32 = ctypes.windll.user32
 g32 = ctypes.windll.gdi32
 k32 = ctypes.windll.kernel32
 dwmapi = ctypes.windll.dwmapi
+comctl32 = getattr(ctypes.windll, "comctl32", None)
 
 k32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
 k32.GetModuleHandleW.restype = HANDLE
@@ -178,7 +204,7 @@ u32.FillRect.argtypes = [HDC, ctypes.POINTER(wintypes.RECT), HANDLE]
 u32.FillRect.restype = INT
 u32.DrawTextW.argtypes = [HDC, ctypes.c_wchar_p, INT, ctypes.POINTER(wintypes.RECT), UINT]
 u32.DrawTextW.restype = INT
-u32.SetLayeredWindowAttributes.argtypes = [HANDLE, ctypes.c_uint, ctypes.c_byte, DWORD]
+u32.SetLayeredWindowAttributes.argtypes = [HANDLE, ctypes.c_uint, ctypes.c_ubyte, DWORD]
 u32.SetLayeredWindowAttributes.restype = BOOL
 u32.SetWindowPos.argtypes = [HANDLE, HANDLE, INT, INT, INT, INT, UINT]
 u32.SetWindowPos.restype = BOOL
@@ -215,6 +241,98 @@ MSGFLT_ALLOW = 1
 if hasattr(u32, "ChangeWindowMessageFilterEx"):
     u32.ChangeWindowMessageFilterEx.argtypes = [HANDLE, UINT, DWORD, ctypes.c_void_p]
     u32.ChangeWindowMessageFilterEx.restype = BOOL
+if hasattr(u32, "SendMessageW"):
+    u32.SendMessageW.argtypes = [HWND, UINT, WPARAM, ctypes.c_void_p]
+    u32.SendMessageW.restype = LRESULT
+
+TTS_ALWAYSTIP = 0x01
+TTS_NOPREFIX = 0x02
+TTF_IDISHWND = 0x0001
+TTF_SUBCLASS = 0x0010
+TTF_TRACK = 0x0020
+TTF_ABSOLUTE = 0x0080
+TTM_ADDTOOLW = 0x0400 + 50
+TTM_UPDATETIPTEXTW = 0x0400 + 57
+TTM_SETMAXTIPWIDTH = 0x0400 + 24
+TTM_SETDELAYTIME = 0x0400 + 3
+TTM_RELAYEVENT = 0x0400 + 7
+TTM_TRACKACTIVATE = 0x0400 + 17
+TTM_TRACKPOSITION = 0x0400 + 18
+TTM_SETWINDOWTHEME = 0x200B
+NM_CUSTOMDRAW = 0xFFFFFFF4
+CDDS_PREPAINT = 0x00000001
+CDDS_ITEMPREPAINT = 0x00010001
+CDRF_DODEFAULT = 0x00000000
+CDRF_SKIPDEFAULT = 0x00000004
+CDRF_NOTIFYITEMDRAW = 0x00000020
+TTDT_AUTOPOP = 2
+TTDT_INITIAL = 3
+ICC_BAR_CLASSES = 0x00000004
+ICC_WIN95_CLASSES = 0x000000FF
+
+
+class INITCOMMONCONTROLSEX(ctypes.Structure):
+    _fields_ = [("dwSize", DWORD), ("dwICC", DWORD)]
+
+
+class TOOLINFOW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", UINT),
+        ("uFlags", UINT),
+        ("hwnd", HWND),
+        ("uId", ctypes.c_size_t),
+        ("rect", wintypes.RECT),
+        ("hinst", HANDLE),
+        ("lpszText", ctypes.c_wchar_p),
+        ("lParam", LPARAM),
+        ("lpReserved", ctypes.c_void_p),
+    ]
+
+
+class NMHDR(ctypes.Structure):
+    _fields_ = [("hwndFrom", HWND), ("idFrom", ctypes.c_size_t), ("code", UINT)]
+
+
+class NMCUSTOMDRAW(ctypes.Structure):
+    _fields_ = [
+        ("hdr", NMHDR),
+        ("dwDrawStage", DWORD),
+        ("hdc", HDC),
+        ("rc", wintypes.RECT),
+        ("dwItemSpec", ctypes.c_size_t),
+        ("uItemState", UINT),
+        ("lItemlParam", LPARAM),
+    ]
+
+
+class NMTTCUSTOMDRAW(ctypes.Structure):
+    _fields_ = [("nmcd", NMCUSTOMDRAW), ("uDrawFlags", UINT)]
+
+
+class ACCENT_POLICY(ctypes.Structure):
+    _fields_ = [
+        ("AccentState", INT),
+        ("AccentFlags", INT),
+        ("GradientColor", DWORD),
+        ("AnimationId", INT),
+    ]
+
+
+class WINDOWCOMPOSITIONATTRIBDATA(ctypes.Structure):
+    _fields_ = [
+        ("Attribute", INT),
+        ("Data", ctypes.c_void_p),
+        ("SizeOfData", ctypes.c_size_t),
+    ]
+
+
+ACCENT_ENABLE_ACRYLICBLURBEHIND = 4
+WCA_ACCENT_POLICY = 19
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWA_SYSTEMBACKDROP_TYPE = 38
+DWMWCP_ROUND = 2
+DWMSBT_TRANSIENTWINDOW = 3
 
 
 g32.CreateSolidBrush.argtypes = [ctypes.c_uint]
@@ -243,6 +361,10 @@ g32.BitBlt.argtypes = [HDC, INT, INT, INT, INT, HDC, INT, INT, DWORD]
 g32.BitBlt.restype = BOOL
 g32.DeleteDC.argtypes = [HDC]
 g32.DeleteDC.restype = BOOL
+g32.CreatePen.argtypes = [INT, INT, ctypes.c_uint]
+g32.CreatePen.restype = HANDLE
+g32.RoundRect.argtypes = [HDC, INT, INT, INT, INT, INT, INT]
+g32.RoundRect.restype = BOOL
 
 
 class WNDCLASSEX(ctypes.Structure):
@@ -283,6 +405,9 @@ u32.IsIconic.argtypes = [HWND]
 u32.IsIconic.restype = BOOL
 dwmapi.DwmGetWindowAttribute.argtypes = [HWND, DWORD, ctypes.c_void_p, DWORD]
 dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
+if hasattr(dwmapi, "DwmSetWindowAttribute"):
+    dwmapi.DwmSetWindowAttribute.argtypes = [HWND, DWORD, ctypes.c_void_p, DWORD]
+    dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
 
 
 def rgb(value: Any) -> int:
@@ -299,22 +424,22 @@ def rgb(value: Any) -> int:
 
 class FontCache:
     def __init__(self) -> None:
-        self.handle: Optional[HANDLE] = None
-        self.key: Optional[tuple[str, int]] = None
+        self.fonts: dict[tuple[str, int, int], HANDLE] = {}
 
-    def get(self, name: str, size: int) -> HANDLE:
-        key = (name, size)
-        if self.handle is None or self.key != key:
-            self.cleanup()
-            self.handle = g32.CreateFontW(size, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, name)
-            self.key = key
-        return self.handle
+    def get(self, name: str, size: int, weight: int = FW_BOLD) -> HANDLE:
+        key = (name, size, weight)
+        if key not in self.fonts:
+            self.fonts[key] = g32.CreateFontW(
+                size, 0, 0, 0, weight, 0, 0, 0,
+                DEFAULT_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, name
+            )
+        return self.fonts[key]
 
     def cleanup(self) -> None:
-        if self.handle:
-            g32.DeleteObject(self.handle)
-            self.handle = None
-            self.key = None
+        for handle in self.fonts.values():
+            if handle:
+                g32.DeleteObject(handle)
+        self.fonts.clear()
 
 
 @dataclass
@@ -325,6 +450,12 @@ class _Runtime:
     on_refresh: Callable[[], Any]
     view: TrackerView
     hwnd: Optional[HWND] = None
+    popup_hwnd: Optional[HWND] = None
+    tooltip_hwnd: Optional[HWND] = None
+    tooltip_toolinfo: Optional[TOOLINFOW] = None
+    tooltip_text: str = ""
+    tooltip_active: bool = False
+    hover_ticks: int = 0
     ticks: int = 0
     last_position: Optional[tuple[int, int, int, int]] = None
     overlay_hidden: bool = False
@@ -372,11 +503,11 @@ def request_close() -> None:
 
 
 
-def _left_aligned_start(client_width: int, content_width: int) -> int:
-    """Keep taskbar text visually aligned to the left edge of its overlay."""
+def _right_aligned_start(client_width: int, content_width: int) -> int:
+    """Keep taskbar text visually aligned to the right edge with a 12 px margin."""
     if client_width <= 0:
         return 0
-    return min(TASKBAR_LEFT_MARGIN, max(0, client_width - max(0, content_width)))
+    return max(10, client_width - content_width - 12)
 
 
 def _render_segments(
@@ -393,9 +524,10 @@ def _render_segments(
     for provider_index, provider in enumerate(view.providers):
         has_next_provider = provider_index < len(view.providers) - 1
         style = provider_styles.get(provider.provider_id, {})
+        display_name = str(style.get("display_name") or provider.display_name or provider.provider_id.title())
         segments.append(
             RenderSegment(
-                provider.display_name,
+                display_name,
                 rgb(style.get("color", "#6CB6FF")),
                 6,
             )
@@ -410,7 +542,7 @@ def _render_segments(
                 RenderSegment(
                     "—",
                     rgb((170, 178, 195)),
-                    5 if has_next_provider else 0,
+                    10 if has_next_provider else 0,
                 )
             )
         for window_index, window in enumerate(windows):
@@ -422,11 +554,16 @@ def _render_segments(
                 if window.severity == "warning"
                 else "#D4D9E5"
             )
-            segments.append(
-                RenderSegment(f"{window.remaining_percent:.0f}%", rgb(quota_color), 4)
-            )
             tail_gap = 5 if has_next_window else 10 if has_next_provider else 0
-            countdown = countdown_suffix(window.reset_in) if include_countdown else ""
+            # Show the reset countdown only when the quota is low enough to matter.
+            countdown = (
+                countdown_suffix(window.reset_in)
+                if include_countdown and window.severity != "normal"
+                else ""
+            )
+            segments.append(
+                RenderSegment(f"{window.remaining_percent:.0f}%", rgb(quota_color), 3)
+            )
             segments.append(
                 RenderSegment(
                     window.short_label,
@@ -462,20 +599,21 @@ def _taskbar_overlay_position(
         ceiling = min(MAX_AUTO_WIDTH, max(taskbar_width - 300, MIN_AUTO_WIDTH))
         width = max(MIN_AUTO_WIDTH, min(int(desired_width), ceiling))
     if taskbar_width >= taskbar_height:
-        x = left + TASKBAR_LEFT_MARGIN
-        safe_right = right - TASKBAR_LEFT_MARGIN
-        notification_gap = max(TASKBAR_NOTIFICATION_GAP, taskbar_height)
+        safe_right = right - TASKBAR_RIGHT_RESERVE
+        notification_gap = TASKBAR_NOTIFICATION_GAP
         if notification_bounds is not None:
             notification_left, notification_top, notification_right, notification_bottom = notification_bounds
             overlaps_taskbar = notification_top < bottom and notification_bottom > top
             inside_taskbar = (
-                x + notification_gap <= notification_left < right
+                left + notification_gap <= notification_left < right
                 and notification_right <= right
                 and notification_left < notification_right
             )
             if overlaps_taskbar and inside_taskbar:
                 safe_right = notification_left - notification_gap
-
+        safe_right = min(right, safe_right)
+        safe_left = left + TASKBAR_LEFT_MARGIN
+        regions: list[tuple[int, int]] = []
         if primary_bounds is not None:
             primary_left, primary_top, primary_right, primary_bottom = primary_bounds
             overlaps_taskbar = primary_top < bottom and primary_bottom > top
@@ -485,18 +623,24 @@ def _taskbar_overlay_position(
                 and primary_left < primary_right
             )
             if overlaps_taskbar and inside_taskbar:
+                right_region_left = primary_right + TASKBAR_PRIMARY_GAP
                 left_region_right = primary_left - TASKBAR_PRIMARY_GAP
-                left_region_width = left_region_right - x
-                if left_region_width >= MIN_AUTO_WIDTH:
-                    safe_right = min(safe_right, left_region_right)
-                else:
-                    # Left-aligned Windows taskbars leave no useful room before
-                    # Start. Sit after the primary buttons in that layout.
-                    x = primary_right + TASKBAR_PRIMARY_GAP
+                if right_region_left < safe_right:
+                    regions.append((right_region_left, safe_right))
+                if safe_left < left_region_right:
+                    regions.append((safe_left, left_region_right))
+        if not regions:
+            regions.append((safe_left, safe_right))
 
-        safe_right = min(right - TASKBAR_LEFT_MARGIN, safe_right)
-        available_width = max(1, safe_right - x)
+        full_width_regions = [region for region in regions if region[1] - region[0] >= width]
+        region_left, region_right = (
+            full_width_regions[0]
+            if full_width_regions
+            else max(regions, key=lambda region: region[1] - region[0])
+        )
+        available_width = max(1, region_right - region_left)
         width = min(width, available_width)
+        x = region_right - width
         return x, top, width, taskbar_height
     width = taskbar_width
     height = min(180, max(60, taskbar_height - 150))
@@ -649,12 +793,16 @@ def _window_bounds(hwnd: HWND) -> Optional[tuple[int, int, int, int]]:
 def _monitor_for_window(
     hwnd: HWND,
 ) -> Optional[tuple[HANDLE, tuple[int, int, int, int]]]:
-    monitor = u32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL)
+    monitor_from_window = getattr(u32, "MonitorFromWindow", None)
+    get_monitor_info = getattr(u32, "GetMonitorInfoW", None)
+    if monitor_from_window is None or get_monitor_info is None:
+        return None
+    monitor = monitor_from_window(hwnd, MONITOR_DEFAULTTONULL)
     if not monitor:
         return None
     info = MONITORINFO()
     info.cbSize = ctypes.sizeof(MONITORINFO)
-    if not u32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+    if not get_monitor_info(monitor, ctypes.byref(info)):
         return None
     bounds = info.rcMonitor
     if bounds.right <= bounds.left or bounds.bottom <= bounds.top:
@@ -1038,7 +1186,7 @@ def _paint(hwnd: HWND) -> None:
         text_width + segment.gap_after
         for segment, text_width in measured
     )
-    x = _left_aligned_start(width, content_width)
+    x = _right_aligned_start(width, content_width)
     for segment, text_width in measured:
         g32.SetTextColor(memory_dc, segment.color)
         _draw_text(memory_dc, segment.text, x, height)
@@ -1052,13 +1200,27 @@ def _paint(hwnd: HWND) -> None:
     u32.EndPaint(hwnd, ctypes.byref(paint))
 
 
+def _toggle_startup() -> None:
+    from app_paths import build_startup_command
+    from startup import is_startup_enabled, set_startup
+
+    try:
+        enabled = is_startup_enabled()
+        set_startup(not enabled, build_startup_command() if not enabled else [])
+    except OSError:
+        pass
+
+
 def _show_menu(hwnd: HWND) -> None:
     if _runtime is None:
         return
+    from startup import is_startup_enabled
+
     menu = u32.CreatePopupMenu()
     try:
-        u32.AppendMenuW(menu, MF_STRING, 1, "Open dashboard")
         u32.AppendMenuW(menu, MF_STRING, 2, "Refresh now")
+        startup_flags = MF_STRING | (MF_CHECKED if is_startup_enabled() else 0)
+        u32.AppendMenuW(menu, startup_flags, 3, "Start with Windows")
         u32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
         for detail in context_detail_lines(_runtime.view):
             u32.AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, detail[:160])
@@ -1070,18 +1232,572 @@ def _show_menu(hwnd: HWND) -> None:
         command = u32.TrackPopupMenu(menu, TPM_RETURNCMD, point.x, point.y, 0, hwnd, None)
     finally:
         u32.DestroyMenu(menu)
-    if command == 1:
-        _runtime.on_open()
-    elif command == 2:
+    if command == 2:
         _runtime.on_refresh()
+    elif command == 3:
+        _toggle_startup()
     elif command == 9:
         u32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+
+
+def _handle_to_int(handle: Any) -> int:
+    if isinstance(handle, int):
+        return handle
+    if hasattr(handle, "value") and handle.value is not None:
+        return handle.value
+    return 0
+
+
+@dataclass(frozen=True)
+class FlyoutLine:
+    text: str
+    color: int
+    is_bold: bool = False
+    is_header: bool = False
+    is_highlighted: bool = False
+    extra_gap_before: int = 0
+
+
+def _build_flyout_lines(
+    view: TrackerView,
+    provider_styles: dict[str, dict[str, Any]],
+) -> tuple[FlyoutLine, ...]:
+    # Keep the hierarchy close to Windows 11 shell flyouts: a strong row label
+    # followed by quieter detail rows, without decorative bullets.
+    lines: list[FlyoutLine] = []
+    if not view.providers:
+        return (
+            FlyoutLine("Q-Tracker", rgb((238, 240, 244)), is_header=True),
+            FlyoutLine(
+                "Waiting for provider quota data...",
+                rgb((166, 170, 180)),
+                extra_gap_before=4,
+            ),
+        )
+
+    for idx, provider in enumerate(view.providers):
+        style = provider_styles.get(provider.provider_id, {})
+        color = rgb(style.get("color", "#E8EAF0"))
+        name = str(style.get("display_name") or provider.display_name or provider.provider_id.title())
+        status_suffix = ""
+        if provider.status == "stale":
+            status_suffix = " (stale)"
+        elif provider.status not in ("ok", ""):
+            status_suffix = f" ({provider.status})"
+        lines.append(
+            FlyoutLine(
+                f"{name}{status_suffix}",
+                color,
+                is_bold=True,
+                extra_gap_before=10 if idx > 0 else 0,
+            )
+        )
+        if not provider.windows:
+            lines.append(FlyoutLine("No active quota windows", rgb((166, 170, 180))))
+        else:
+            for window in provider.windows:
+                detail = _format_window_reset_detail(window)
+                imminent = is_reset_imminent(window.reset_in)
+                lines.append(
+                    FlyoutLine(
+                        f"{window.label}: {window.remaining_percent:.0f}% left · {detail}",
+                        rgb((255, 220, 145) if imminent else (216, 219, 226)),
+                        is_bold=imminent,
+                        is_highlighted=imminent,
+                    )
+                )
+    return tuple(lines)
+
+
+def _measure_flyout_size(lines: tuple[FlyoutLine, ...]) -> tuple[int, int]:
+    hdc = u32.GetDC(None)
+    if not hdc:
+        return 440, 210
+    try:
+        title_font = _font_cache.get("Segoe UI Variable Text", 18, FW_BOLD)
+        bold_font = _font_cache.get("Segoe UI Variable Text", 17, FW_BOLD)
+        normal_font = _font_cache.get("Segoe UI Variable Text", 16, FW_NORMAL)
+        max_w = 310
+        total_h = 32
+        for line in lines:
+            font = title_font if line.is_header else bold_font if line.is_bold else normal_font
+            line_height = 30 if line.is_header else 28 if line.is_bold else 26
+            old_font = g32.SelectObject(hdc, font)
+            size = wintypes.SIZE()
+            g32.GetTextExtentPoint32W(hdc, line.text, len(line.text), ctypes.byref(size))
+            g32.SelectObject(hdc, old_font)
+            if size.cx > max_w:
+                max_w = size.cx
+            total_h += line_height + line.extra_gap_before
+        width = min(620, max(360, max_w + 48))
+        height = total_h
+        return width, height
+    finally:
+        u32.ReleaseDC(None, hdc)
+
+
+def _paint_flyout(hwnd: HWND) -> None:
+    if _runtime is None:
+        return
+    paint = PAINTSTRUCT()
+    hdc = u32.BeginPaint(hwnd, ctypes.byref(paint))
+    if not hdc:
+        return
+    rectangle = wintypes.RECT()
+    u32.GetClientRect(hwnd, ctypes.byref(rectangle))
+    width = max(1, rectangle.right - rectangle.left)
+    height = max(1, rectangle.bottom - rectangle.top)
+
+    memory_dc = g32.CreateCompatibleDC(hdc)
+    bitmap = g32.CreateCompatibleBitmap(hdc, width, height)
+    old_bitmap = g32.SelectObject(memory_dc, bitmap)
+
+    # Windows 11 shell-like dark card. The popup itself is globally
+    # translucent and additionally asks DWM for an acrylic backdrop.
+    bg_brush = g32.CreateSolidBrush(rgb((31, 31, 34)))
+    border_pen = g32.CreatePen(0, 1, rgb((72, 74, 82)))
+    old_brush = g32.SelectObject(memory_dc, bg_brush)
+    old_pen = g32.SelectObject(memory_dc, border_pen)
+    g32.RoundRect(
+        memory_dc,
+        0,
+        0,
+        width,
+        height,
+        FLYOUT_CORNER_RADIUS,
+        FLYOUT_CORNER_RADIUS,
+    )
+    g32.SelectObject(memory_dc, old_brush)
+    g32.SelectObject(memory_dc, old_pen)
+    g32.DeleteObject(bg_brush)
+    g32.DeleteObject(border_pen)
+
+    g32.SetBkMode(memory_dc, BK_TRANSPARENT)
+
+    title_font = _font_cache.get("Segoe UI Variable Text", 18, FW_BOLD)
+    bold_font = _font_cache.get("Segoe UI Variable Text", 17, FW_BOLD)
+    normal_font = _font_cache.get("Segoe UI Variable Text", 16, FW_NORMAL)
+
+    lines = _build_flyout_lines(_runtime.view, getattr(_runtime.settings, "provider_styles", {}))
+
+    y = 16
+    for line in lines:
+        y += line.extra_gap_before
+        font = title_font if line.is_header else bold_font if line.is_bold else normal_font
+        line_height = 30 if line.is_header else 28 if line.is_bold else 26
+        old_font = g32.SelectObject(memory_dc, font)
+        g32.SetTextColor(memory_dc, line.color)
+        r = wintypes.RECT(22, y, width - 22, y + line_height)
+        u32.DrawTextW(memory_dc, line.text, -1, ctypes.byref(r), DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX)
+        g32.SelectObject(memory_dc, old_font)
+        y += line_height
+
+    g32.BitBlt(hdc, 0, 0, width, height, memory_dc, 0, 0, 0x00CC0020)
+    g32.SelectObject(memory_dc, old_bitmap)
+    g32.DeleteObject(bitmap)
+    g32.DeleteDC(memory_dc)
+    u32.EndPaint(hwnd, ctypes.byref(paint))
+
+
+def _flyout_wnd_proc(hwnd: HWND, message: int, wparam: int, lparam: int) -> int:
+    try:
+        if message == WM_PAINT:
+            _paint_flyout(hwnd)
+            return 0
+        if message == WM_ERASEBKGND:
+            return 1
+    except Exception:
+        pass
+    return u32.DefWindowProcW(hwnd, message, wparam, lparam)
+
+
+_flyout_wndproc_ref: Optional[WNDPROC] = None
+
+
+def _acrylic_gradient_color(
+    red: int = 28,
+    green: int = 29,
+    blue: int = 32,
+    alpha: int = 204,
+) -> int:
+    """Pack an acrylic tint as AABBGGRR for AccentPolicy."""
+    return (
+        (max(0, min(255, int(alpha))) << 24)
+        | (max(0, min(255, int(blue))) << 16)
+        | (max(0, min(255, int(green))) << 8)
+        | max(0, min(255, int(red)))
+    )
+
+
+def _apply_flyout_visual_effects(hwnd: HWND) -> bool:
+    """Enable Windows 11 dark acrylic styling, with layered alpha as fallback."""
+    if not hwnd:
+        return False
+
+    # Keep the popup visually aligned with Windows 11 shell flyouts.
+    dwm_set = getattr(dwmapi, "DwmSetWindowAttribute", None)
+    if dwm_set is not None:
+        try:
+            dark = INT(1)
+            dwm_set(
+                hwnd,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                ctypes.byref(dark),
+                ctypes.sizeof(dark),
+            )
+            corners = INT(DWMWCP_ROUND)
+            dwm_set(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                ctypes.byref(corners),
+                ctypes.sizeof(corners),
+            )
+        except (AttributeError, OSError, TypeError, ValueError):
+            pass
+
+    acrylic_enabled = False
+    composition = getattr(u32, "SetWindowCompositionAttribute", None)
+    if composition is not None:
+        try:
+            try:
+                composition.argtypes = [HWND, ctypes.POINTER(WINDOWCOMPOSITIONATTRIBDATA)]
+                composition.restype = BOOL
+            except (AttributeError, TypeError):
+                pass
+            accent = ACCENT_POLICY(
+                ACCENT_ENABLE_ACRYLICBLURBEHIND,
+                2,
+                _acrylic_gradient_color(),
+                0,
+            )
+            data = WINDOWCOMPOSITIONATTRIBDATA(
+                WCA_ACCENT_POLICY,
+                ctypes.cast(ctypes.byref(accent), ctypes.c_void_p),
+                ctypes.sizeof(accent),
+            )
+            acrylic_enabled = bool(composition(hwnd, ctypes.byref(data)))
+        except (AttributeError, OSError, TypeError, ValueError):
+            acrylic_enabled = False
+
+    # Newer Windows builds can provide the shell transient-window backdrop even
+    # when the older AccentPolicy acrylic call is unavailable.
+    if not acrylic_enabled and dwm_set is not None:
+        try:
+            backdrop = INT(DWMSBT_TRANSIENTWINDOW)
+            acrylic_enabled = (
+                dwm_set(
+                    hwnd,
+                    DWMWA_SYSTEMBACKDROP_TYPE,
+                    ctypes.byref(backdrop),
+                    ctypes.sizeof(backdrop),
+                )
+                == 0
+            )
+        except (AttributeError, OSError, TypeError, ValueError):
+            acrylic_enabled = False
+
+    # Guaranteed translucency even if the compositor refuses acrylic.
+    set_layered = getattr(u32, "SetLayeredWindowAttributes", None)
+    if set_layered is not None:
+        try:
+            set_layered(hwnd, 0, FLYOUT_ALPHA, LWA_ALPHA)
+        except (AttributeError, OSError, TypeError, ValueError):
+            pass
+    return acrylic_enabled
+
+
+def _init_tooltip(hwnd: HWND) -> None:
+    """Create the custom translucent Windows-style hover flyout."""
+    global _flyout_wndproc_ref
+    if _runtime is None or not hwnd:
+        return
+    try:
+        instance = k32.GetModuleHandleW(None)
+        class_name = "QTrackerHoverFlyoutV2"
+        _flyout_wndproc_ref = WNDPROC(_flyout_wnd_proc)
+
+        window_class = WNDCLASSEX()
+        window_class.cbSize = ctypes.sizeof(WNDCLASSEX)
+        window_class.style = CS_HREDRAW | CS_VREDRAW | CS_DROPSHADOW
+        window_class.lpfnWndProc = _flyout_wndproc_ref
+        window_class.hInstance = instance
+        window_class.hCursor = u32.LoadCursorW(None, IDC_ARROW)
+        window_class.hbrBackground = None
+        window_class.lpszClassName = class_name
+        if not u32.RegisterClassExW(ctypes.byref(window_class)):
+            get_err = getattr(k32, "GetLastError", ctypes.get_last_error)
+            if get_err() != ERROR_CLASS_ALREADY_EXISTS:
+                logger.warning(
+                    "_init_tooltip: hover flyout class registration failed with %s",
+                    get_err(),
+                )
+                return
+
+        get_parent = getattr(u32, "GetParent", None)
+        owner = get_parent(hwnd) if get_parent is not None else None
+        if not owner:
+            owner = hwnd
+
+        ex_style = (
+            WS_EX_TOPMOST
+            | WS_EX_TOOLWINDOW
+            | WS_EX_NOACTIVATE
+            | WS_EX_LAYERED
+            | WS_EX_TRANSPARENT
+        )
+        popup_hwnd = u32.CreateWindowExW(
+            ex_style,
+            class_name,
+            None,
+            WS_POPUP,
+            0,
+            0,
+            1,
+            1,
+            owner,
+            None,
+            instance,
+            None,
+        )
+        if not popup_hwnd:
+            logger.warning("_init_tooltip: custom hover flyout creation failed")
+            return
+
+        acrylic_enabled = _apply_flyout_visual_effects(popup_hwnd)
+        _runtime.popup_hwnd = popup_hwnd
+        # Keep this alias for compatibility with cleanup/tests that still refer
+        # to the historical tooltip handle.
+        _runtime.tooltip_hwnd = popup_hwnd
+        _runtime.tooltip_toolinfo = None
+        _runtime.tooltip_active = False
+        _runtime.hover_ticks = 0
+        _runtime.tooltip_text = format_tooltip_text(_runtime.view)
+        logger.info(
+            "_init_tooltip: custom hover flyout created hwnd=%s acrylic=%s alpha=%s",
+            popup_hwnd,
+            acrylic_enabled,
+            FLYOUT_ALPHA,
+        )
+    except Exception as exc:
+        logger.warning("_init_tooltip failed: %s", exc)
+
+
+def _show_flyout(hwnd: HWND, widget_rect: wintypes.RECT) -> None:
+    if _runtime is None:
+        return
+    popup_hwnd = getattr(_runtime, "popup_hwnd", None) or getattr(_runtime, "tooltip_hwnd", None)
+    if not popup_hwnd:
+        return
+
+    provider_styles = getattr(_runtime.settings, "provider_styles", {}) if hasattr(_runtime, "settings") else {}
+    lines = _build_flyout_lines(_runtime.view, provider_styles)
+    width, height = _measure_flyout_size(lines)
+    width = min(width, 520)
+
+    widget_width = widget_rect.right - widget_rect.left
+    x = widget_rect.left + (widget_width - width) // 2
+    y = widget_rect.top - height - 10
+
+    if widget_rect.top < 150:
+        y = widget_rect.bottom + 10
+
+    monitor_info = _monitor_for_window(hwnd)
+    if monitor_info:
+        m_left, m_top, m_right, m_bottom = monitor_info[1]
+        x = min(x, m_right - width - 8)
+        x = max(x, m_left + 8)
+        y = min(y, m_bottom - height - 8)
+        y = max(y, m_top + 8)
+    else:
+        x = max(10, x)
+        y = max(10, y)
+
+    _apply_flyout_visual_effects(popup_hwnd)
+    u32.SetWindowPos(
+        popup_hwnd,
+        HWND_TOPMOST,
+        int(x),
+        int(y),
+        int(width),
+        int(height),
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    )
+    u32.ShowWindow(popup_hwnd, SW_SHOWNOACTIVATE)
+    u32.InvalidateRect(popup_hwnd, None, 0)
+    update = getattr(u32, "UpdateWindow", None)
+    if update is not None:
+        update(popup_hwnd)
+    _runtime.tooltip_active = True
+
+
+def _hide_flyout() -> None:
+    if _runtime is None:
+        return
+    popup_hwnd = getattr(_runtime, "popup_hwnd", None) or getattr(_runtime, "tooltip_hwnd", None)
+    if not popup_hwnd:
+        return
+    if getattr(_runtime, "tooltip_active", False):
+        u32.ShowWindow(popup_hwnd, SW_HIDE)
+        _runtime.tooltip_active = False
+
+
+def _update_tooltip() -> None:
+    if _runtime is None:
+        return
+    _runtime.tooltip_text = format_tooltip_text(_runtime.view)
+    popup_hwnd = getattr(_runtime, "popup_hwnd", None) or getattr(_runtime, "tooltip_hwnd", None)
+    if not popup_hwnd:
+        return
+    u32.InvalidateRect(popup_hwnd, None, 0)
+    if getattr(_runtime, "tooltip_active", False) and getattr(_runtime, "hwnd", None):
+        widget_rect = wintypes.RECT()
+        get_rect = getattr(u32, "GetWindowRect", None)
+        if get_rect is not None and get_rect(_runtime.hwnd, ctypes.byref(widget_rect)):
+            _show_flyout(_runtime.hwnd, widget_rect)
+
+
+def _draw_tooltip_content(hdc: HDC, rectangle: wintypes.RECT) -> None:
+    """Draw the translucent tooltip card with per-quota emphasis."""
+    if _runtime is None or not hdc:
+        return
+    background = g32.CreateSolidBrush(rgb((22, 22, 25)))
+    border = g32.CreatePen(0, 1, rgb((60, 62, 68)))
+    old_brush = g32.SelectObject(hdc, background)
+    old_pen = g32.SelectObject(hdc, border)
+    g32.RoundRect(
+        hdc,
+        rectangle.left,
+        rectangle.top,
+        rectangle.right,
+        rectangle.bottom,
+        12,
+        12,
+    )
+    g32.SelectObject(hdc, old_brush)
+    g32.SelectObject(hdc, old_pen)
+    g32.DeleteObject(background)
+    g32.DeleteObject(border)
+
+    provider_styles = getattr(_runtime.settings, "provider_styles", {}) if hasattr(_runtime, "settings") else {}
+    lines = _build_flyout_lines(_runtime.view, provider_styles)
+    g32.SetBkMode(hdc, BK_TRANSPARENT)
+    title_font = _font_cache.get("Segoe UI", 15, FW_BOLD)
+    bold_font = _font_cache.get("Segoe UI", 13, FW_BOLD)
+    normal_font = _font_cache.get("Segoe UI", 13, FW_NORMAL)
+    y = rectangle.top + 8
+    content_left = rectangle.left + 14
+    content_right = rectangle.right - 14
+
+    for line in lines:
+        y += line.extra_gap_before
+        line_height = 22 if line.is_header else 20 if line.is_bold else 18
+        text_rect = wintypes.RECT(content_left, y, content_right, y + line_height)
+        if line.is_highlighted:
+            highlight = wintypes.RECT(
+                max(rectangle.left + 5, content_left - 6),
+                y - 2,
+                min(rectangle.right - 5, content_right + 6),
+                y + line_height + 2,
+            )
+            brush = g32.CreateSolidBrush(rgb((68, 49, 21)))
+            pen = g32.CreatePen(0, 1, rgb((104, 77, 35)))
+            old_brush = g32.SelectObject(hdc, brush)
+            old_pen = g32.SelectObject(hdc, pen)
+            g32.RoundRect(hdc, highlight.left, highlight.top, highlight.right, highlight.bottom, 8, 8)
+            g32.SelectObject(hdc, old_brush)
+            g32.SelectObject(hdc, old_pen)
+            g32.DeleteObject(brush)
+            g32.DeleteObject(pen)
+
+        font = title_font if line.is_header else bold_font if line.is_bold else normal_font
+        old_font = g32.SelectObject(hdc, font)
+        g32.SetTextColor(hdc, line.color)
+        u32.DrawTextW(
+            hdc,
+            line.text,
+            -1,
+            ctypes.byref(text_rect),
+            DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX,
+        )
+        g32.SelectObject(hdc, old_font)
+        y += line_height
+
+
+def _handle_tooltip_custom_draw(lparam: int) -> int:
+    if _runtime is None or not lparam:
+        return CDRF_DODEFAULT
+    try:
+        draw = ctypes.cast(ctypes.c_void_p(int(lparam)), ctypes.POINTER(NMTTCUSTOMDRAW)).contents
+        tooltip_hwnd = getattr(_runtime, "tooltip_hwnd", None)
+        if (
+            draw.nmcd.hdr.code != NM_CUSTOMDRAW
+            or _handle_to_int(draw.nmcd.hdr.hwndFrom) != _handle_to_int(tooltip_hwnd)
+        ):
+            return CDRF_DODEFAULT
+        if draw.nmcd.dwDrawStage == CDDS_PREPAINT:
+            return CDRF_NOTIFYITEMDRAW
+        if draw.nmcd.dwDrawStage == CDDS_ITEMPREPAINT:
+            _draw_tooltip_content(draw.nmcd.hdc, draw.nmcd.rc)
+            return CDRF_SKIPDEFAULT
+    except Exception:
+        logger.exception("Tooltip custom draw failed")
+    return CDRF_DODEFAULT
+
+
+def _sync_tooltip_hover(hwnd: HWND) -> None:
+    if _runtime is None or not hwnd:
+        return
+    popup_hwnd = getattr(_runtime, "popup_hwnd", None) or getattr(_runtime, "tooltip_hwnd", None)
+    if not popup_hwnd:
+        return
+    if getattr(_runtime, "overlay_hidden", False):
+        if getattr(_runtime, "tooltip_active", False):
+            _hide_flyout()
+        return
+
+    get_cursor = getattr(u32, "GetCursorPos", None)
+    get_rect = getattr(u32, "GetWindowRect", None)
+    if get_cursor is None or get_rect is None:
+        return
+
+    pt = wintypes.POINT()
+    if not get_cursor(ctypes.byref(pt)):
+        return
+    widget_rect = wintypes.RECT()
+    if not get_rect(hwnd, ctypes.byref(widget_rect)):
+        return
+
+    is_over_widget = (
+        widget_rect.left - 4 <= pt.x <= widget_rect.right + 4
+        and widget_rect.top - 4 <= pt.y <= widget_rect.bottom + 4
+    )
+
+    is_over_popup = False
+    if getattr(_runtime, "tooltip_active", False) and popup_hwnd:
+        popup_rect = wintypes.RECT()
+        if get_rect(popup_hwnd, ctypes.byref(popup_rect)):
+            is_over_popup = (
+                popup_rect.left - 4 <= pt.x <= popup_rect.right + 4
+                and popup_rect.top - 4 <= pt.y <= popup_rect.bottom + 4
+            )
+
+    if is_over_widget or is_over_popup:
+        _runtime.hover_ticks = getattr(_runtime, "hover_ticks", 0) + 1
+        hover_elapsed_ms = _runtime.hover_ticks * SHELL_SYNC_INTERVAL_MS
+        if hover_elapsed_ms >= TOOLTIP_HOVER_DELAY_MS and not getattr(_runtime, "tooltip_active", False):
+            _show_flyout(hwnd, widget_rect)
+    else:
+        _runtime.hover_ticks = 0
+        if getattr(_runtime, "tooltip_active", False):
+            _hide_flyout()
 
 
 def _wnd_proc(hwnd: HWND, message: int, wparam: int, lparam: int) -> int:
     if _runtime is None:
         return u32.DefWindowProcW(hwnd, message, wparam, lparam)
     try:
+        if message == WM_NOTIFY:
+            return _handle_tooltip_custom_draw(lparam)
         if message == WM_SHELL_ZORDER_REPAIR:
             if not _runtime.overlay_hidden:
                 _ensure_overlay_above_taskbar(hwnd)
@@ -1097,6 +1813,7 @@ def _wnd_proc(hwnd: HWND, message: int, wparam: int, lparam: int) -> int:
                     # only issued when the client geometry actually differs.
                     _reposition(hwnd)
                     _ensure_overlay_above_taskbar(hwnd)
+                _sync_tooltip_hover(hwnd)
                 return 0
             if wparam == DATA_REFRESH_TIMER_ID:
                 _runtime.ticks += 1
@@ -1107,6 +1824,7 @@ def _wnd_proc(hwnd: HWND, message: int, wparam: int, lparam: int) -> int:
                 if view.fingerprint != _runtime.view.fingerprint:
                     _runtime.view = view
                     _reposition(hwnd)
+                    _update_tooltip()
                     u32.InvalidateRect(hwnd, None, 0)
                 return 0
             return u32.DefWindowProcW(hwnd, message, wparam, lparam)
@@ -1127,6 +1845,17 @@ def _wnd_proc(hwnd: HWND, message: int, wparam: int, lparam: int) -> int:
         if message == WM_CLOSE:
             _runtime.shutting_down = True
             _uninstall_shell_event_hook()
+            if getattr(_runtime, "popup_hwnd", None):
+                destroy_win = getattr(u32, "DestroyWindow", None)
+                if destroy_win is not None:
+                    try:
+                        destroy_win(_runtime.popup_hwnd)
+                    except Exception:
+                        pass
+                _runtime.popup_hwnd = None
+                _runtime.tooltip_hwnd = None
+                _runtime.tooltip_toolinfo = None
+                _runtime.tooltip_active = False
             u32.KillTimer(hwnd, DATA_REFRESH_TIMER_ID)
             u32.KillTimer(hwnd, SHELL_SYNC_TIMER_ID)
             u32.DestroyWindow(hwnd)
@@ -1134,9 +1863,20 @@ def _wnd_proc(hwnd: HWND, message: int, wparam: int, lparam: int) -> int:
         if message == WM_DESTROY:
             _uninstall_shell_event_hook()
             _font_cache.cleanup()
-            if _runtime.hwnd == hwnd:
+            if getattr(_runtime, "popup_hwnd", None):
+                destroy_win = getattr(u32, "DestroyWindow", None)
+                if destroy_win is not None:
+                    try:
+                        destroy_win(_runtime.popup_hwnd)
+                    except Exception:
+                        pass
+                _runtime.popup_hwnd = None
+                _runtime.tooltip_hwnd = None
+                _runtime.tooltip_toolinfo = None
+                _runtime.tooltip_active = False
+            if getattr(_runtime, "hwnd", None) == hwnd:
                 _runtime.hwnd = None
-            if _runtime.shutting_down:
+            if getattr(_runtime, "shutting_down", False):
                 u32.PostQuitMessage(0)
             return 0
     except Exception:
@@ -1191,6 +1931,7 @@ def _create_window(max_retries: int = 30, retry_delay: float = 0.5) -> bool:
             time.sleep(retry_delay)
 
     if not taskbar:
+        logger.warning("_create_window: taskbar not found after %d attempts", max_retries)
         return False
     instance = k32.GetModuleHandleW(None)
     class_name = "QTrackerTaskbarV1"
@@ -1208,6 +1949,7 @@ def _create_window(max_retries: int = 30, retry_delay: float = 0.5) -> bool:
     if not u32.RegisterClassExW(ctypes.byref(window_class)):
         get_err = getattr(k32, "GetLastError", ctypes.get_last_error)
         if get_err() != ERROR_CLASS_ALREADY_EXISTS:
+            logger.warning("_create_window: RegisterClassExW failed with %s", get_err())
             return False
     _runtime.hwnd = _create_taskbar_child(
         instance,
@@ -1216,6 +1958,8 @@ def _create_window(max_retries: int = 30, retry_delay: float = 0.5) -> bool:
         taskbar,
     )
     if not _runtime.hwnd:
+        get_err = getattr(k32, "GetLastError", ctypes.get_last_error)
+        logger.warning("_create_window: _create_taskbar_child failed with %s", get_err())
         return False
     if hasattr(u32, "ChangeWindowMessageFilterEx") and WM_TASKBARCREATED:
         try:
@@ -1223,6 +1967,7 @@ def _create_window(max_retries: int = 30, retry_delay: float = 0.5) -> bool:
         except (AttributeError, OSError):
             pass
     u32.SetLayeredWindowAttributes(_runtime.hwnd, COLORKEY_RGB, 0, LWA_COLORKEY)
+    _init_tooltip(_runtime.hwnd)
     _reposition(_runtime.hwnd)
     u32.SetTimer(
         _runtime.hwnd,
@@ -1275,7 +2020,8 @@ def run_taskbar(
     )
     reconnect_timer = None
     try:
-        _create_window(max_retries=10, retry_delay=0.2)
+        created = _create_window(max_retries=10, retry_delay=0.2)
+        logger.info("_create_window initial result: %s (hwnd: %s)", created, _runtime.hwnd if _runtime else None)
         # A thread timer is not owned by the taskbar child, so it survives when
         # Explorer destroys and replaces Shell_TrayWnd during login or restart.
         reconnect_timer = u32.SetTimer(None, 0, SHELL_RECONNECT_INTERVAL_MS, None)
@@ -1284,6 +2030,7 @@ def run_taskbar(
         while True:
             result = u32.GetMessageW(ctypes.byref(message), None, 0, 0)
             if result <= 0:
+                logger.info("GetMessageW exited with result: %s, msg: %s", result, message.message)
                 break
             if (
                 reconnect_timer

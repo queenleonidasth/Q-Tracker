@@ -45,7 +45,7 @@ RETRIEVE_QUOTA_SUMMARY_URL = (
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REQUEST_TIMEOUT = 10.0
 
-FAMILY_LABELS = {"gemini": "Gemini", "3p": "Claude & GPT"}
+FAMILY_LABELS = {"gemini": "Gemini", "claude": "Claude", "gpt": "GPT-OSS"}
 BUCKET_LABELS = {
     "gemini-5h": "Gemini 5H",
     "gemini-weekly": "Gemini Weekly",
@@ -287,7 +287,7 @@ def parse_quota_groups(
 def aggregate_model_quota(
     models: dict[str, Any], now: Optional[datetime] = None
 ) -> dict[str, dict[str, Any]]:
-    """Fold per-model quotaInfo into gemini/3p groups using the binding minimum."""
+    """Fold per-model quotaInfo into Gemini, Claude, and GPT provider pools."""
     now_dt = now or datetime.now(timezone.utc)
     best: dict[str, tuple[float, str]] = {}
     for name, entry in models.items():
@@ -302,7 +302,15 @@ def aggregate_model_quota(
         if not isinstance(fraction, (int, float)) or isinstance(fraction, bool):
             continue
         fraction = max(0.0, min(1.0, float(fraction)))
-        family = "gemini" if name.startswith("gemini") else "3p"
+        lower_name = name.lower()
+        if lower_name.startswith("gemini"):
+            family = "gemini"
+        elif lower_name.startswith("claude"):
+            family = "claude"
+        elif lower_name.startswith("gpt"):
+            family = "gpt"
+        else:
+            continue
         reset_time = str(quota.get("resetTime") or "")
         current = best.get(family)
         if current is None or fraction < current[0]:
@@ -357,24 +365,46 @@ def fetch_from_cloud(verbose: bool = False) -> Optional[dict]:
             log("token expired and refresh failed; trying stale token")
 
     groups: dict[str, dict[str, Any]] = {}
-    status, raw_groups = fetch_quota_summary(access_token)
-    if status == 200 and raw_groups:
-        groups = parse_quota_groups(raw_groups)
-        if groups:
-            log(f"got {len(groups)} bucket(s) via retrieveUserQuotaSummary")
+
+    # Gemini's request windows are authoritative in the quota summary.
+    summary_status, raw_groups = fetch_quota_summary(access_token)
+    if summary_status == 200 and raw_groups:
+        summary_groups = parse_quota_groups(raw_groups)
+        gemini_groups = {
+            key: value
+            for key, value in summary_groups.items()
+            if key.startswith("gemini-")
+        }
+        groups.update(gemini_groups)
+        if gemini_groups:
+            log(
+                f"got {len(gemini_groups)} Gemini bucket(s) "
+                "via retrieveUserQuotaSummary"
+            )
     else:
-        log(f"retrieveUserQuotaSummary failed (HTTP {status}); trying models endpoint")
+        log(f"retrieveUserQuotaSummary failed (HTTP {summary_status})")
+
+    # Claude/GPT quotas are exposed through fetchAvailableModels.quotaInfo.
+    # Do not label the legacy 3p-* summary buckets as Claude: they are shared
+    # third-party request windows and can disagree with the model/provider pool.
+    models_status, models = fetch_available_models(access_token)
+    if models_status == 200 and models:
+        model_groups = aggregate_model_quota(models)
+        for family in ("claude", "gpt"):
+            if family in model_groups:
+                groups[family] = model_groups[family]
+        if not any(key.startswith("gemini-") for key in groups) and "gemini" in model_groups:
+            groups["gemini"] = model_groups["gemini"]
+        log(
+            "got model-pool quota via fetchAvailableModels: "
+            + ", ".join(sorted(model_groups))
+        )
+    else:
+        log(f"fetchAvailableModels failed (HTTP {models_status})")
 
     if not groups:
-        status, models = fetch_available_models(access_token)
-        if status != 200 or not models:
-            log(f"fetchAvailableModels failed (HTTP {status})")
-            return None
-        groups = aggregate_model_quota(models)
-        if not groups:
-            log("response contained no usable quota entries")
-            return None
-        log(f"got {len(groups)} group(s) via fetchAvailableModels")
+        log("response contained no usable quota entries")
+        return None
 
     data = {
         "timestamp": datetime.now().isoformat(),

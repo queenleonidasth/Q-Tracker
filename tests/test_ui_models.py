@@ -7,6 +7,7 @@ from ui_models import (
     context_detail_lines,
     format_countdown,
     format_tokens,
+    is_reset_imminent,
     taskbar_overlay_width,
     taskbar_windows,
 )
@@ -246,3 +247,12 @@ def test_context_details_include_source_freshness_reset_and_error():
     assert "2h ago" in lines[0]
     assert "resets 2h 30m" in lines[1]
     assert lines[2] == "  Timed out"
+
+
+def test_reset_imminent_uses_one_hour_window():
+    assert is_reset_imminent("now") is True
+    assert is_reset_imminent("59m") is True
+    assert is_reset_imminent("1h") is True
+    assert is_reset_imminent("1h 1m") is False
+    assert is_reset_imminent("6d 22h") is False
+    assert is_reset_imminent("—") is False

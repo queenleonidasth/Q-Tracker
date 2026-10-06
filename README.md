@@ -1,4 +1,4 @@
-﻿# Q-Tracker
+# Q-Tracker
 
 Q-Tracker is a lightweight Windows 11 utility that displays real-time AI quota and token usage for OpenAI Codex, Antigravity (AGY), and Google Gemini CLI directly on your taskbar and system tray.
 
@@ -13,14 +13,14 @@ Instead of interrupting your work to check web dashboards or run CLI status comm
 - Gemini CLI tracking: Reads stored OAuth credentials from `~/.gemini` to track quota buckets for Gemini Pro, Flash, and Flash Lite models via the Google Code Assist backend.
 - Quiet operation: Queries local APIs and official OAuth endpoints directly without spawning console windows or background CLI child processes.
 - Threshold alerts: Displays desktop notifications when quota drops to 20%, 10%, or 5% (alerting once per threshold per reset cycle).
-- Built-in dashboard: Double-click the taskbar readout or tray icon to open the full dashboard with per-provider details, token usage breakdown (today, this month, all-time), and connection health.
+- Streamlined taskbar-only UX: Unobtrusive, minimal text readout directly on your taskbar (`A 45% 5H · 80% W   C 82% 5H · 91% W`) with color-coded severity alerts and reset countdowns when quota is low.
 - Privacy-first: Runs entirely locally. No analytics, no telemetry, and no secret keys or tokens are ever written to logs or state files.
 
 ## Installation
 
 ### Pre-built Binary
 
-Download the latest `Q-Tracker-v1.4.0-windows-x64.zip` from the [Releases](https://github.com/queenleonidasth/Q-Tracker/releases/latest) page, extract the archive, and run `Q-Tracker.exe`. No Python setup is required.
+Download the latest Windows x64 ZIP from the [Releases](https://github.com/queenleonidasth/Q-Tracker/releases/latest) page, extract the archive, and run `Q-Tracker.exe`. No Python setup is required.
 
 ### Running from Source
 
@@ -45,9 +45,9 @@ Requires Windows 11 and Python 3.13+.
 
 ## Controls & Indicators
 
-- Double-click (taskbar text or tray icon): Opens the dashboard.
-- Right-click (taskbar text or tray icon): Opens a menu to refresh data, view token summary, or exit.
-- Start with Windows: Can be enabled directly from the dashboard settings. It writes a run key under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` and requires no administrator rights.
+- Double-click (taskbar text): Refreshes provider quota data immediately.
+- Right-click (taskbar text): Opens menu to refresh data, toggle "Start with Windows", view provider details, or exit.
+- Start with Windows: Can be toggled directly from the taskbar right-click menu. It writes a run key under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` and requires no administrator rights.
 
 ### Status Symbols
 
@@ -115,9 +115,6 @@ The script runs the full test suite and packages the application with PyInstalle
 
 # Print a sanitized diagnostics report
 .\.venv\Scripts\python.exe .\app.py --diagnostics
-
-# Open dashboard directly
-.\.venv\Scripts\pythonw.exe .\app.py --dashboard
 
 # Run tests
 .\.venv\Scripts\python.exe -m pytest -q
