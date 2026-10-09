@@ -139,6 +139,7 @@ SHELL_SYNC_INTERVAL_MS = 10
 TOOLTIP_HOVER_DELAY_MS = 450
 SHELL_RECONNECT_INTERVAL_MS = 2_000
 GW_HWNDPREV = 3
+GW_OWNER = 4
 HWND_TOPMOST = -1
 u32 = ctypes.windll.user32
 g32 = ctypes.windll.gdi32
@@ -458,6 +459,9 @@ class _Runtime:
     hover_ticks: int = 0
     ticks: int = 0
     last_position: Optional[tuple[int, int, int, int]] = None
+    last_notification_bounds: Optional[tuple[int, int, int, int]] = None
+    last_notification_taskbar: Optional[int] = None
+    last_notification_taskbar_bounds: Optional[tuple[int, int, int, int]] = None
     overlay_hidden: bool = False
     compact_countdowns: bool = False
     shutting_down: bool = False
@@ -1000,6 +1004,10 @@ def _ensure_overlay_above_taskbar(hwnd: HWND) -> bool:
         return False
     get_parent = getattr(u32, "GetParent", None)
     if get_parent is not None and get_parent(hwnd) == taskbar:
+        # GetParent returns the owner for a WS_POPUP too.  An owned top-level
+        # popup is already stacked above its owner; do not treat it as a child.
+        if u32.GetWindow(hwnd, GW_OWNER) == taskbar:
+            return True
         if not u32.GetWindow(hwnd, GW_HWNDPREV):
             return True
         return bool(
@@ -1062,20 +1070,45 @@ def _reposition(hwnd: HWND) -> bool:
     display = getattr(_runtime.settings, "display", {}) or {}
     configured_width = int(display.get("width", 460))
     full_needed = _content_width(include_countdown=True) + _CONTENT_MARGINS_PX
-    position = _taskbar_child_position(taskbar, configured_width, desired_width=full_needed)
+    # Calculate the native taskbar-child position from screen geometry and
+    # convert it back to client coordinates before passing it to SetWindowPos.
+    # Keep the last notification-area anchor when Start temporarily hides it.
+    bounds = wintypes.RECT()
+    get_window_rect = getattr(u32, "GetWindowRect", None)
+    if get_window_rect is None or not get_window_rect(taskbar, ctypes.byref(bounds)):
+        return False
+    taskbar_bounds = (bounds.left, bounds.top, bounds.right, bounds.bottom)
+    notification_bounds = _taskbar_notification_bounds(taskbar)
+    if notification_bounds is not None:
+        # Start temporarily hides TrayNotifyWnd on some shell builds.
+        # Cache its last real boundary instead of falling back to a narrower
+        # fixed reserve that makes the tracker slide right by ~67 pixels.
+        _runtime.last_notification_bounds = notification_bounds
+        _runtime.last_notification_taskbar = taskbar
+        _runtime.last_notification_taskbar_bounds = taskbar_bounds
+    elif (
+        getattr(_runtime, "last_notification_taskbar", None) == taskbar
+        and getattr(_runtime, "last_notification_taskbar_bounds", None) == taskbar_bounds
+    ):
+        notification_bounds = getattr(_runtime, "last_notification_bounds", None)
+    position = _taskbar_overlay_position(
+        taskbar_bounds,
+        configured_width,
+        notification_bounds=notification_bounds,
+        desired_width=full_needed,
+        primary_bounds=_taskbar_primary_controls_bounds(taskbar),
+    )
     if position is None:
-        bounds = wintypes.RECT()
-        get_window_rect = getattr(u32, "GetWindowRect", None)
-        if get_window_rect is None or not get_window_rect(taskbar, ctypes.byref(bounds)):
-            return False
-        taskbar_bounds = (bounds.left, bounds.top, bounds.right, bounds.bottom)
-        screen_position = _taskbar_overlay_position(
-            taskbar_bounds, configured_width, desired_width=full_needed
-        )
-        if screen_position is None:
-            return False
-        x, y, width, height = screen_position
-        position = (x - bounds.left, y - bounds.top, width, height)
+        return False
+    # Shell taskbar repaints over free-floating windows while Start is open.
+    # Render as a taskbar child, but use the cached tray boundary so the
+    # position stays fixed through Start/notification-area transitions.
+    position = (
+        position[0] - bounds.left,
+        position[1] - bounds.top,
+        position[2],
+        position[3],
+    )
     _runtime.compact_countdowns = position[2] + 4 < full_needed
     if _runtime.last_position == position:
         return True
@@ -1891,6 +1924,11 @@ def _create_taskbar_child(
     width: int,
     taskbar: HWND,
 ) -> HANDLE:
+    """Keep the overlay painted on the taskbar, outside Explorer's toolbar layout.
+
+    The independently layered popup is covered by Explorer during Start UI.
+    Use the original taskbar child geometry with a stable cached tray anchor.
+    """
     return u32.CreateWindowExW(
         WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TOPMOST,
         class_name,

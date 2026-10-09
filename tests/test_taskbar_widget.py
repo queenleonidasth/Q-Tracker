@@ -234,7 +234,7 @@ def test_reposition_skips_unchanged_valid_position(monkeypatch):
 
 
 def test_reposition_uses_taskbar_client_coordinates(monkeypatch):
-    """A taskbar child must be positioned relative to its Explorer parent."""
+    """A taskbar child uses coordinates relative to its parent taskbar."""
     runtime = _runtime(_view("test"))
     runtime.settings.display = {"width": 460}
 
@@ -269,8 +269,8 @@ def test_reposition_uses_taskbar_client_coordinates(monkeypatch):
     ]
 
 
-def test_reposition_uses_current_taskbar_client_size_after_resolution_change(monkeypatch):
-    """A child position must follow Explorer's current client size, not stale screen bounds."""
+def test_reposition_uses_current_taskbar_bounds_after_resolution_change(monkeypatch):
+    """The taskbar child follows Explorer bounds after resolution changes."""
     runtime = _runtime(_view("test"))
     runtime.settings.display = {"width": 460}
 
@@ -287,7 +287,7 @@ def test_reposition_uses_current_taskbar_client_size_after_resolution_change(mon
         SimpleNamespace(
             FindWindowW=lambda *_: 99,
             GetClientRect=_rect_reader((0, 0, 2560, 64)),
-            GetWindowRect=_rect_reader((0, 1032, 1920, 1080)),
+            GetWindowRect=_rect_reader((0, 1032, 2560, 1096)),
             SetWindowPos=lambda *args: set_position_calls.append(args) or 1,
         ),
     )
@@ -307,7 +307,7 @@ def test_reposition_uses_current_taskbar_client_size_after_resolution_change(mon
 
 
 def test_reposition_uses_dynamic_notification_boundary_in_client_coordinates(monkeypatch):
-    """Screen-space tray bounds must keep one safe slot in client space."""
+    """The tray bounds convert to stable taskbar-child coordinates."""
     runtime = _runtime(_view("test"))
     runtime.settings.display = {"width": 460}
 
@@ -1165,8 +1165,8 @@ def test_changed_view_invalidates_without_background_erase(monkeypatch):
     assert invalidate_calls == [(100, None, 0)]
 
 
-def test_taskbar_child_is_created_inside_explorer_taskbar(monkeypatch):
-    """Explorer must host the widget so Start cannot cover its taskbar surface."""
+def test_taskbar_overlay_is_a_layered_explorer_taskbar_child(monkeypatch):
+    """The child attaches without registering itself as a ReBar toolbar."""
     captured = []
     monkeypatch.setattr(
         widget,
@@ -1180,6 +1180,7 @@ def test_taskbar_child_is_created_inside_explorer_taskbar(monkeypatch):
     assert captured[0][8] == 99
     assert captured[0][1] == "TrackerClass"
     assert captured[0][3] & widget.WS_CHILD
+    assert not (captured[0][3] & widget.WS_POPUP)
     assert captured[0][3] & widget.WS_CLIPCHILDREN
     assert captured[0][3] & widget.WS_CLIPSIBLINGS
     assert captured[0][0] & widget.WS_EX_NOACTIVATE
@@ -1397,6 +1398,7 @@ def test_reconnect_timer_recreates_overlay_after_explorer_restart(monkeypatch):
             FindWindowW=lambda *_: 99,
             IsWindow=lambda hwnd: hwnd == 321,
             GetParent=lambda _hwnd: 88,
+            GetWindow=lambda _hwnd, _command: 88,
             DestroyWindow=lambda hwnd: destroyed.append(hwnd) or 1,
         ),
     )
@@ -1769,3 +1771,116 @@ def test_native_tooltip_custom_draw_replaces_item_text(monkeypatch):
     assert widget._wnd_proc(widget.HWND(100), widget.WM_NOTIFY, 0, pointer) == widget.CDRF_SKIPDEFAULT
     assert drawn[0][0] == 300
     assert (drawn[0][1].left, drawn[0][1].top, drawn[0][1].right, drawn[0][1].bottom) == (0, 0, 420, 160)
+
+
+def test_start_menu_temporarily_hiding_tray_does_not_shift_overlay(monkeypatch):
+    """The Start animation must not change the overlay's known safe right edge."""
+    runtime = _runtime(_view("stable"))
+    runtime.settings.display = {"width": 460}
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    monkeypatch.setattr(widget, "_content_width", lambda include_countdown=True: 409)
+    shown = [True]
+    calls = []
+    monkeypatch.setattr(
+        widget,
+        "_taskbar_notification_bounds",
+        lambda _h: (3151, 1392, 3440, 1440) if shown[0] else None,
+    )
+    monkeypatch.setattr(widget, "_taskbar_primary_controls_bounds", lambda _h: None)
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            FindWindowW=lambda *_: 99,
+            GetWindowRect=_rect_reader((0, 1392, 3440, 1440)),
+            SetWindowPos=lambda *args: calls.append(args) or 1,
+        ),
+    )
+    assert widget._reposition(100) is True
+    anchor = runtime.last_position
+    assert len(calls) == 1
+    shown[0] = False
+    assert widget._reposition(100) is True
+    assert runtime.last_position == anchor
+    assert len(calls) == 1
+
+
+def test_cached_tray_boundary_invalidates_on_display_change(monkeypatch):
+    """Do not reuse stale notification geometry after a resolution change."""
+    runtime = _runtime(_view("stable"))
+    runtime.settings.display = {"width": 460}
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    monkeypatch.setattr(widget, "_content_width", lambda include_countdown=True: 409)
+    bounds = [[0, 1392, 3440, 1440]]
+    shown = [True]
+    calls = []
+    def get_rect(_hwnd, ptr):
+        rect = ptr._obj
+        rect.left, rect.top, rect.right, rect.bottom = bounds[0]
+        return 1
+    monkeypatch.setattr(
+        widget,
+        "_taskbar_notification_bounds",
+        lambda _h: (3151, 1392, 3440, 1440) if shown[0] else None,
+    )
+    monkeypatch.setattr(widget, "_taskbar_primary_controls_bounds", lambda _h: None)
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            FindWindowW=lambda *_: 99,
+            GetWindowRect=get_rect,
+            SetWindowPos=lambda *args: calls.append(args) or 1,
+        ),
+    )
+    assert widget._reposition(100) is True
+    shown[0] = False
+    bounds[0] = [0, 1032, 1920, 1080]
+    assert widget._reposition(100) is True
+    assert len(calls) == 2
+    assert calls[1][2] + calls[1][4] <= 1920 - widget.TASKBAR_RIGHT_RESERVE
+
+
+def test_taskbar_child_stays_attached_without_recreating(monkeypatch):
+    """The taskbar child survives reconnect checks while its parent lives."""
+    runtime = _runtime(_view("stable"))
+    runtime.hwnd = 321
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    calls = []
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            FindWindowW=lambda *_: 99,
+            IsWindow=lambda h: h == 321,
+            GetParent=lambda _h: 99,
+            GetWindow=lambda h, cmd: 0,
+            DestroyWindow=lambda *_: calls.append("destroy"),
+        ),
+    )
+    monkeypatch.setattr(
+        widget,
+        "_create_window",
+        lambda **kwargs: calls.append("create"),
+    )
+    assert widget._ensure_taskbar_window() is True
+    assert runtime.hwnd == 321
+    assert calls == []
+
+
+def test_taskbar_owned_popup_does_not_restack_as_child(monkeypatch):
+    """Owned popup must not be reordered among Explorer's child widgets."""
+    calls = []
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            FindWindowW=lambda *_: 99,
+            IsWindowVisible=lambda *_: True,
+            GetParent=lambda *_: 99,
+            GetWindow=lambda _hwnd, cmd: 99 if cmd == widget.GW_OWNER else 0,
+            SetWindowPos=lambda *args: calls.append(args) or True,
+        ),
+    )
+    assert widget._ensure_overlay_above_taskbar(321) is True
+    assert calls == []
