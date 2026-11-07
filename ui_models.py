@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
@@ -35,6 +35,7 @@ class ProviderView:
     age_text: str
     plan: str
     message: str
+    billing: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +93,56 @@ def taskbar_windows(
     return ()
 
 
+def _money(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
+def format_money(value: float) -> str:
+    return f"${value:,.2f}"
+
+
+def billing_spend_text(billing: Any) -> str:
+    """``Used $6.39`` taken from a credit snapshot, or an empty string."""
+    credit = billing.get("credit") if isinstance(billing, dict) else None
+    used = _money(credit.get("used_usd")) if isinstance(credit, dict) else None
+    return "" if used is None else f"Used ${used:,.2f}"
+
+
+def openai_billing_lines(provider: ProviderView, now: Optional[datetime] = None) -> tuple[str, ...]:
+    """Money rows for a credit-cycle provider that reports no percentage windows.
+
+    Only the spent figure is shown; a remaining-balance figure is deliberately
+    not surfaced on any surface.
+    """
+    billing = provider.billing if isinstance(provider.billing, dict) else {}
+    credit = billing.get("credit")
+    if not isinstance(credit, dict):
+        return ()
+    used = _money(credit.get("used_usd"))
+    if used is None:
+        reason = str(credit.get("message") or provider.message or "")
+        return (reason or "Balance is unavailable for this key",)
+
+    allowance = _money(credit.get("allowance_usd"))
+    line = f"Used {format_money(used)}"
+    if allowance is not None:
+        line += f" of {format_money(allowance)}"
+
+    reference = now or datetime.now().astimezone()
+    reset_in = format_countdown(credit.get("cycle_end"), reference)
+    if reset_in and reset_in != "—":
+        cycle_end = _parse_timestamp(credit.get("cycle_end"))
+        if cycle_end is not None:
+            line += f" · resets {cycle_end.astimezone().strftime('%b %d')} ({reset_in})"
+        else:
+            line += f" · resets in {reset_in}"
+    return (line,)
+
+
 def context_detail_lines(view: TrackerView) -> tuple[str, ...]:
     """Readable provider detail lines for compact native context surfaces."""
     if not view.providers:
@@ -106,6 +157,8 @@ def context_detail_lines(view: TrackerView) -> tuple[str, ...]:
             lines.append(
                 f"  {window.label}: {window.remaining_percent:.1f}% left · resets {window.reset_in}"
             )
+        for detail in openai_billing_lines(provider):
+            lines.append(f"  {detail}")
         if provider.message:
             lines.append(f"  {provider.message}")
     return tuple(lines)
@@ -146,12 +199,15 @@ def format_tooltip_text(view: TrackerView) -> str:
         elif provider.status not in ("ok", ""):
             status_suffix = f" ({provider.status})"
         lines.append(f"{name}{status_suffix}:")
-        if not provider.windows:
+        billing_lines = openai_billing_lines(provider)
+        if not provider.windows and not billing_lines:
             lines.append("  • No active quota windows")
         else:
             for window in provider.windows:
                 detail = _format_window_reset_detail(window)
                 lines.append(f"  • {window.label}: {window.remaining_percent:.0f}% left · {detail}")
+            for detail in billing_lines:
+                lines.append(f"  • {detail}")
         if idx < len(view.providers) - 1:
             lines.append("")
 
@@ -314,6 +370,7 @@ def build_provider_view(snapshot: dict[str, Any], now: Optional[datetime] = None
         )
 
     prefix = display_name + (f" {indicator}" if indicator else "")
+    billing = snapshot.get("billing") if isinstance(snapshot.get("billing"), dict) else {}
     if windows:
         parts: list[str] = []
         for window in windows:
@@ -324,7 +381,7 @@ def build_provider_view(snapshot: dict[str, Any], now: Optional[datetime] = None
             parts.append(part)
         details = " · ".join(parts)
     else:
-        details = "—"
+        details = billing_spend_text(billing) or "—"
     observed_at = snapshot.get("observed_at") or snapshot.get("fetched_at")
     return ProviderView(
         provider_id=provider_id,
@@ -339,6 +396,7 @@ def build_provider_view(snapshot: dict[str, Any], now: Optional[datetime] = None
         age_text=format_age(observed_at, reference),
         plan=str(snapshot.get("plan") or snapshot.get("plan_type") or "unknown"),
         message=str(snapshot.get("message") or snapshot.get("error_message") or ""),
+        billing=billing,
     )
 
 

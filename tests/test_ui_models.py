@@ -1,13 +1,17 @@
 from datetime import datetime, timezone
 
 from ui_models import (
+    ProviderView,
+    TrackerView,
     _short_label,
     build_provider_view,
     build_tracker_view,
     context_detail_lines,
     format_countdown,
+    format_tooltip_text,
     format_tokens,
     is_reset_imminent,
+    openai_billing_lines,
     taskbar_overlay_width,
     taskbar_windows,
 )
@@ -256,3 +260,76 @@ def test_reset_imminent_uses_one_hour_window():
     assert is_reset_imminent("1h 1m") is False
     assert is_reset_imminent("6d 22h") is False
     assert is_reset_imminent("—") is False
+
+
+CYCLE_NOW = datetime(2026, 11, 7, 1, 37, tzinfo=timezone.utc)
+OPENAI_SNAPSHOT = {
+    "provider_id": "openai_platform",
+    "display_name": "OpenAI API",
+    "status": "ok",
+    "source": "openai_platform_api",
+    "observed_at": "2026-11-06T18:37:17.792503Z",
+    "plan": "unknown",
+    "message": "",
+    "windows": {},
+    "billing": {
+        "costs": {"status": "live", "spent_usd": 6.394482615, "source": "official_costs_api"},
+        "credit": {
+            "status": "estimated",
+            "allowance_usd": 31.0,
+            "used_usd": 6.394482615,
+            "cycle_start": "2026-10-22T00:00:00+07:00",
+            "cycle_end": "2026-11-22T00:00:00+07:00",
+            "basis": "official_cycle_costs",
+        },
+    },
+}
+
+
+def _openai_view(snapshot: dict) -> ProviderView:
+    return build_provider_view(snapshot, CYCLE_NOW)
+
+
+def test_openai_snapshot_compact_text_shows_only_the_spend():
+    provider = _openai_view(OPENAI_SNAPSHOT)
+
+    assert provider.compact_text == "OpenAI API Used $6.39"
+    assert provider.windows == ()
+    assert provider.billing["credit"]["basis"] == "official_cycle_costs"
+
+
+def test_openai_billing_lines_show_spend_allowance_and_reset():
+    lines = openai_billing_lines(_openai_view(OPENAI_SNAPSHOT), CYCLE_NOW)
+
+    assert len(lines) == 1
+    assert lines[0].startswith("Used $6.39 of $31.00")
+    assert "resets" in lines[0]
+    assert "left" not in lines[0]
+
+
+def test_openai_billing_lines_state_the_reason_when_unavailable():
+    snapshot = {
+        **OPENAI_SNAPSHOT,
+        "status": "unavailable",
+        "message": "OpenAI API key not configured",
+        "billing": {"credit": {"status": "unavailable", "allowance_usd": 40.0}},
+    }
+
+    lines = openai_billing_lines(_openai_view(snapshot), CYCLE_NOW)
+
+    assert lines == ("OpenAI API key not configured",)
+
+
+def test_openai_provider_renders_in_the_detail_surfaces():
+    view = TrackerView(
+        providers=(_openai_view(OPENAI_SNAPSHOT),),
+        compact_text="",
+        token_totals={},
+    )
+
+    details = context_detail_lines(view)
+    tooltip = format_tooltip_text(view)
+
+    assert any("Used $6.39" in line for line in details)
+    assert "Used $6.39" in tooltip
+    assert "No active quota windows" not in tooltip

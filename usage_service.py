@@ -18,6 +18,7 @@ from quota_models import (
     utc_now_iso,
 )
 from quota_sources import AgyQuotaSource, CodexQuotaSource
+from openai_platform_billing import OpenAIPlatformQuotaSource
 from state_store import AtomicStateStore, get_store
 
 
@@ -29,7 +30,17 @@ TTL_SECONDS = {
     FetchStatus.RATE_LIMITED: 300.0,
 }
 
+PROVIDER_NAMES = {
+    "agy": "Antigravity",
+    "codex": "ChatGPT",
+    "openai_platform": "OpenAI API",
+}
+
 TOKEN_METRICS = ("input", "cached_input", "output", "reasoning_output", "total")
+
+
+def _provider_name(provider_id: str) -> str:
+    return PROVIDER_NAMES.get(provider_id, provider_id.title())
 
 
 def _token_metrics(value: Any) -> dict[str, int]:
@@ -109,7 +120,7 @@ class UsageService:
                 return existing
             return ProviderSnapshot.failure(
                 provider_id,
-                "Antigravity" if provider_id == "agy" else "ChatGPT" if provider_id == "codex" else provider_id.title(),
+                _provider_name(provider_id),
                 FetchStatus.UNAVAILABLE,
                 "Refresh already in progress",
             )
@@ -131,7 +142,7 @@ class UsageService:
             except Exception as error:
                 incoming = ProviderSnapshot.failure(
                     provider_id,
-                    "Antigravity" if provider_id == "agy" else "ChatGPT" if provider_id == "codex" else provider_id.title(),
+                    _provider_name(provider_id),
                     FetchStatus.ERROR,
                     str(error) or error.__class__.__name__,
                     error_kind=ProviderErrorKind.OTHER.value,
@@ -164,7 +175,7 @@ class UsageService:
         )
         return ProviderSnapshot.failure(
             provider_id,
-            "Antigravity" if provider_id == "agy" else "ChatGPT" if provider_id == "codex" else provider_id.title(),
+            _provider_name(provider_id),
             status,
             str(error),
             error_kind=error.kind.value,
@@ -343,6 +354,7 @@ def get_service() -> UsageService:
             {
                 "agy": AgyQuotaSource(),
                 "codex": CodexQuotaSource(),
+                "openai_platform": OpenAIPlatformQuotaSource(),
                 # Gemini intentionally omitted: Q-Tracker runs only AGY + Codex/ChatGPT.
             },
             scanner=CodexUsageScanner(),

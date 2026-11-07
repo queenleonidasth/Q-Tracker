@@ -13,10 +13,11 @@ from typing import Any
 DEFAULT_PROVIDER_STYLES = {
     "agy": {"display_name": "Antigravity", "color": "#F4C76B", "icon": "A"},
     "codex": {"display_name": "ChatGPT", "color": "#F4C76B", "icon": "C"},
+    "openai_platform": {"display_name": "OpenAI API", "color": "#F4C76B", "icon": "$"},
     # Gemini provider intentionally omitted; Antigravity already covers the requested Google quota surface.
 }
 
-DEFAULT_ENABLED_PROVIDERS = ("agy", "codex")
+DEFAULT_ENABLED_PROVIDERS = ("agy", "codex", "openai_platform")
 
 TASKBAR_WINDOW_IDS = frozenset(
     {"session", "weekly", "monthly", "code_review", "pro", "flash", "flash_lite"}
@@ -97,7 +98,7 @@ class Settings:
         legacy_providers = raw.get("providers")
         if isinstance(legacy_providers, dict):
             for name, data in legacy_providers.items():
-                provider_id = str(name).strip().lower()
+                provider_id = str(name).strip().lower().replace(" ", "_").replace("-", "_")
                 if provider_id == "antigravity":
                     provider_id = "agy"
                 if provider_id in styles and isinstance(data, dict):

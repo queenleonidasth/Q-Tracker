@@ -80,10 +80,25 @@ def test_settings_recovers_invalid_json_with_safe_defaults(tmp_path):
     settings = Settings.load(path)
 
     assert settings.refresh_interval_seconds == 60
-    assert settings.enabled_providers == ("agy", "codex")
+    assert settings.enabled_providers == ("agy", "codex", "openai_platform")
     assert settings.provider_styles["agy"]["color"] == "#F4C76B"
     assert settings.provider_styles["codex"]["color"] == "#F4C76B"
+    assert settings.provider_styles["openai_platform"]["display_name"] == "OpenAI API"
     assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
+
+
+def test_settings_normalizes_spaced_provider_keys(tmp_path):
+    """A written-out provider name must reach the style entry it describes."""
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"providers": {"OpenAI Platform": {"color": "#112233", "icon": "$"}}}),
+        encoding="utf-8",
+    )
+
+    settings = Settings.load(path)
+
+    assert settings.provider_styles["openai_platform"]["color"] == "#112233"
+    assert "openai platform" not in settings.provider_styles
 
 
 def test_settings_accepts_legacy_display_and_provider_shape(tmp_path):

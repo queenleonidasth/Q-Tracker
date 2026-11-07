@@ -740,11 +740,11 @@ def test_render_segments_preserve_compact_provider_text_order():
     view = TrackerView(
         providers=(
             _provider(
-                "agy",
-                "Antigravity",
+                "codex",
+                "Codex",
                 (_window("session", "5H", 91), _window("weekly", "W", 94)),
             ),
-            _provider("codex", "Codex", (_window("weekly", "W", 46),)),
+            _provider("gemini", "Gemini", (_window("pro", "Gemini Pro", 46),)),
         ),
         compact_text="",
         token_totals={},
@@ -752,24 +752,50 @@ def test_render_segments_preserve_compact_provider_text_order():
 
     segments = widget._render_segments(
         view,
-        {"agy": {"color": "#35C2FF"}, "codex": {"color": "#7FE36A"}},
+        {"codex": {"color": "#7FE36A"}, "gemini": {"color": "#35C2FF"}},
     )
 
     assert [segment.text for segment in segments] == [
-        "Antigravity",
+        "Codex",
         "91%",
         "5H",
         "·",
         "94%",
         "W",
         " | ",
-        "Codex",
+        "Gemini",
         "46%",
-        "W",
+        "Gemini Pro",
     ]
     assert segments[1].text == "91%"
     assert segments[5].gap_after == 10
     assert segments[-1].gap_after == 0
+
+
+def test_render_segments_drop_hidden_providers_from_taskbar_text():
+    """Antigravity stays out of the taskbar readout even when its data is loaded."""
+    view = TrackerView(
+        providers=(
+            _provider("agy", "Antigravity", (_window("session", "5H", 91),)),
+            _provider("codex", "Codex", (_window("weekly", "W", 46),)),
+        ),
+        compact_text="",
+        token_totals={},
+    )
+
+    segments = widget._render_segments(view, {})
+
+    assert "Antigravity" not in "".join(segment.text for segment in segments)
+    assert [segment.text for segment in segments] == ["Codex", "46%", "W"]
+
+
+def test_render_segments_shows_openai_spend_instead_of_a_dash():
+    """A credit-cycle provider has no percentages, so its money figure reads out."""
+    view = TrackerView(providers=(_openai_provider(),), compact_text="", token_totals={})
+
+    segments = widget._render_segments(view, {})
+
+    assert [segment.text for segment in segments] == ["OpenAI API", "Used $6.39"]
 
 
 def test_render_segments_include_waiting_text_without_providers():
@@ -785,8 +811,8 @@ def test_render_segments_show_reset_countdown_only_for_low_quota():
     view = TrackerView(
         providers=(
             _provider(
-                "agy",
-                "Antigravity",
+                "codex",
+                "Codex",
                 (
                     WindowView(
                         "session", "5H", "5H", 12.0, 88.0,
@@ -803,10 +829,10 @@ def test_render_segments_show_reset_countdown_only_for_low_quota():
         token_totals={},
     )
 
-    segments = widget._render_segments(view, {"agy": {"color": "#35C2FF"}})
+    segments = widget._render_segments(view, {"codex": {"color": "#35C2FF"}})
 
     assert [segment.text for segment in segments] == [
-        "Antigravity",
+        "Codex",
         "12%",
         "5H",
         "·1h57m",
@@ -822,8 +848,8 @@ def test_render_segments_can_omit_reset_countdowns():
     view = TrackerView(
         providers=(
             _provider(
-                "agy",
-                "Antigravity",
+                "codex",
+                "Codex",
                 (
                     WindowView(
                         "session", "5H", "5H", 9.0, 91.0,
@@ -837,10 +863,10 @@ def test_render_segments_can_omit_reset_countdowns():
     )
 
     segments = widget._render_segments(
-        view, {"agy": {"color": "#35C2FF"}}, include_countdown=False
+        view, {"codex": {"color": "#35C2FF"}}, include_countdown=False
     )
 
-    assert [segment.text for segment in segments] == ["Antigravity", "9%", "5H"]
+    assert [segment.text for segment in segments] == ["Codex", "9%", "5H"]
 
 
 def test_overlay_position_shrinks_to_desired_content_width():
@@ -1712,7 +1738,7 @@ def test_init_tooltip_uses_custom_translucent_flyout(monkeypatch):
     assert ex_style & widget.WS_EX_LAYERED
     assert ex_style & widget.WS_EX_NOACTIVATE
     assert ex_style & widget.WS_EX_TOPMOST
-    assert ex_style & widget.WS_EX_TRANSPARENT
+    assert not ex_style & widget.WS_EX_TRANSPARENT
     assert create_calls[0][2] is None
     assert create_calls[0][3] == widget.WS_POPUP
     assert create_calls[0][8] == 99
@@ -1749,6 +1775,148 @@ def test_build_flyout_lines_highlights_each_imminent_reset():
     assert imminent.is_highlighted is True
     assert distant.is_bold is False
     assert distant.is_highlighted is False
+
+
+def _openai_provider() -> ProviderView:
+    return ProviderView(
+        provider_id="openai_platform",
+        display_name="OpenAI API",
+        status="ok",
+        indicator="",
+        compact_text="OpenAI API Used $6.39",
+        windows=(),
+        source="openai_platform_api",
+        observed_at=None,
+        refreshed_at=None,
+        age_text="just now",
+        plan="unknown",
+        message="",
+        billing={
+            "credit": {
+                "status": "estimated",
+                "allowance_usd": 31.0,
+                "used_usd": 6.39,
+                "cycle_start": "2026-10-22T00:00:00+07:00",
+                "cycle_end": "2026-11-22T00:00:00+07:00",
+                "basis": "official_cycle_costs",
+            }
+        },
+    )
+
+
+def test_flyout_hides_antigravity_and_shows_the_openai_spend():
+    """The dashboard drops Antigravity rows and renders credit spend instead."""
+    view = TrackerView(
+        providers=(
+            _provider("agy", "Antigravity", (_window("session", "5H", 91),)),
+            _openai_provider(),
+        ),
+        compact_text="",
+        token_totals={},
+    )
+
+    texts = [line.text for line in widget._build_flyout_lines(view, {}, startup_enabled=False)]
+
+    assert not any("Antigravity" in text for text in texts)
+    assert any(text.startswith("Used $6.39") for text in texts)
+
+
+def test_flyout_ends_with_the_right_click_actions():
+    """Every command that used to need a right click is reachable in the flyout."""
+    view = TrackerView(
+        providers=(_provider("codex", "ChatGPT", (_window("session", "5H", 91),)),),
+        compact_text="",
+        token_totals={},
+    )
+
+    lines = widget._build_flyout_lines(view, {}, startup_enabled=True)
+
+    actions = [line for line in lines if line.action]
+    assert [line.action for line in actions] == [
+        "refresh",
+        "configure_openai",
+        "billing_page",
+        "startup",
+        "exit",
+    ]
+    startup = next(line for line in actions if line.action == "startup")
+    assert startup.text == "Start with Windows: On"
+    assert lines.index(startup) < len(lines) - 1
+
+
+def test_flyout_layout_and_measurement_agree():
+    """The click map must be built from the same rows the painter measured."""
+    lines = widget._build_flyout_lines(
+        TrackerView(providers=(), compact_text="", token_totals={}), {}, startup_enabled=False
+    )
+    _width, height = widget._measure_flyout_size(lines)
+    rows = widget._flyout_layout(lines, 460)
+
+    assert rows[0][1] == 16
+    assert rows[-1][3] + 16 == height
+
+
+def _packed(x: int, y: int) -> int:
+    return (y << 16) | (x & 0xFFFF)
+
+
+def test_flyout_click_runs_the_matching_command(monkeypatch):
+    """A click inside an action row dispatches exactly that command."""
+    refreshes = []
+    runtime = _runtime(_view("test"))
+    runtime.hwnd = 100
+    runtime.flyout_hits = ((22, 400, 400, 430, "refresh"),)
+    runtime.flyout_hover = ""
+    runtime.on_refresh = lambda: refreshes.append(True)
+    posts = []
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(
+            InvalidateRect=lambda *args: 1,
+            PostMessageW=lambda *args: posts.append(args) or 1,
+            DefWindowProcW=lambda *args: 0,
+        ),
+    )
+
+    assert widget._flyout_wnd_proc(200, widget.WM_LBUTTONUP, 0, _packed(100, 410)) == 0
+    assert refreshes == [True]
+    assert posts == []
+
+    assert widget._flyout_wnd_proc(200, widget.WM_LBUTTONUP, 0, _packed(100, 12)) == 0
+    assert refreshes == [True]
+
+    assert widget._flyout_wnd_proc(200, widget.WM_MOUSEMOVE, 0, _packed(100, 410)) == 0
+    assert runtime.flyout_hover == "refresh"
+
+
+def test_flyout_exit_closes_the_overlay(monkeypatch):
+    posts = []
+    runtime = _runtime(_view("test"))
+    runtime.hwnd = 100
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    monkeypatch.setattr(
+        widget,
+        "u32",
+        SimpleNamespace(PostMessageW=lambda *args: posts.append(args) or 1),
+    )
+
+    widget._run_command("exit")
+
+    assert posts[0][1] == widget.WM_CLOSE
+
+
+def test_run_command_refreshes_after_saving_a_key(monkeypatch):
+    refreshes = []
+    runtime = _runtime(_view("test"))
+    runtime.on_refresh = lambda: refreshes.append(True)
+    monkeypatch.setattr(widget, "_runtime", runtime)
+    monkeypatch.setattr("openai_credentials.configure_gui", lambda parent=None: True)
+
+    widget._run_command("configure_openai")
+
+    assert refreshes == [True]
 
 
 def test_native_tooltip_custom_draw_replaces_item_text(monkeypatch):

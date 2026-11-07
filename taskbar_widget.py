@@ -19,11 +19,13 @@ from settings import Settings
 from state_store import AtomicStateStore
 from ui_models import (
     TrackerView,
+    billing_spend_text,
     build_tracker_view,
     context_detail_lines,
     countdown_suffix,
     format_tooltip_text,
     is_reset_imminent,
+    openai_billing_lines,
     taskbar_overlay_width,
     taskbar_windows,
     _format_window_reset_detail,
@@ -82,6 +84,7 @@ WM_SETTINGCHANGE = 0x001A
 WM_DISPLAYCHANGE = 0x007E
 WM_TIMER = 0x0113
 WM_MOUSEMOVE = 0x0200
+WM_SETCURSOR = 0x0020
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
 WM_LBUTTONDBLCLK = 0x0203
@@ -97,6 +100,7 @@ CS_HREDRAW = 0x0002
 CS_VREDRAW = 0x0001
 CS_DBLCLKS = 0x0008
 IDC_ARROW = 32512
+IDC_HAND = 32649
 BK_TRANSPARENT = 1
 DT_SINGLELINE = 0x0020
 DT_VCENTER = 0x0004
@@ -115,6 +119,20 @@ LWA_ALPHA = 0x00000002
 TOOLTIP_ALPHA = 210
 FLYOUT_ALPHA = 228
 FLYOUT_CORNER_RADIUS = 14
+# Providers kept out of every readout surface: the taskbar overlay and the
+# hover dashboard alike.
+HIDDEN_PROVIDER_IDS = frozenset({"agy"})
+OPENAI_BILLING_URL = "https://platform.openai.com/settings/organization/billing/overview"
+FLYOUT_ACTION_HEIGHT = 30
+FLYOUT_ACTION_GAP = 6
+FLYOUT_ACTION_INSET = 14
+FLYOUT_ACTIONS = (
+    ("refresh", "Refresh now"),
+    ("configure_openai", "Configure OpenAI API..."),
+    ("billing_page", "OpenAI Billing Page"),
+    ("startup", "Start with Windows"),
+    ("exit", "Exit"),
+)
 TPM_RETURNCMD = 0x0100
 MF_STRING = 0x0000
 MF_SEPARATOR = 0x0800
@@ -465,6 +483,8 @@ class _Runtime:
     overlay_hidden: bool = False
     compact_countdowns: bool = False
     shutting_down: bool = False
+    flyout_hits: tuple[tuple[int, int, int, int, str], ...] = ()
+    flyout_hover: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -521,12 +541,15 @@ def _render_segments(
     taskbar_window_map: Optional[dict[str, tuple[str, ...]]] = None,
 ) -> tuple[RenderSegment, ...]:
     window_map = taskbar_window_map or {}
-    if not view.providers:
+    visible = tuple(
+        provider for provider in view.providers if provider.provider_id not in HIDDEN_PROVIDER_IDS
+    )
+    if not visible:
         return (RenderSegment("Q-Tracker — waiting for data", rgb((170, 178, 195))),)
 
     segments: list[RenderSegment] = []
-    for provider_index, provider in enumerate(view.providers):
-        has_next_provider = provider_index < len(view.providers) - 1
+    for provider_index, provider in enumerate(visible):
+        has_next_provider = provider_index < len(visible) - 1
         style = provider_styles.get(provider.provider_id, {})
         display_name = str(style.get("display_name") or provider.display_name or provider.provider_id.title())
         segments.append(
@@ -542,10 +565,11 @@ def _render_segments(
 
         windows = taskbar_windows(provider, preferred_ids=window_map.get(provider.provider_id))
         if not windows:
+            spend = billing_spend_text(provider.billing)
             segments.append(
                 RenderSegment(
-                    "—",
-                    rgb((170, 178, 195)),
+                    spend or "—",
+                    rgb("#D4D9E5" if spend else (170, 178, 195)),
                     10 if has_next_provider else 0,
                 )
             )
@@ -1244,33 +1268,63 @@ def _toggle_startup() -> None:
         pass
 
 
+def _run_command(action: str) -> None:
+    """Run one dashboard/menu command from either surface."""
+    if _runtime is None or not action:
+        return
+    if action == "refresh":
+        _runtime.on_refresh()
+        return
+    if action == "configure_openai":
+        from openai_credentials import configure_gui
+
+        try:
+            saved = configure_gui()
+        except Exception:
+            logger.exception("OpenAI credential dialog failed")
+            return
+        if saved:
+            _runtime.on_refresh()
+        return
+    if action == "billing_page":
+        import webbrowser
+
+        try:
+            webbrowser.open(OPENAI_BILLING_URL)
+        except Exception:
+            logger.warning("Could not open the OpenAI billing page")
+        return
+    if action == "startup":
+        _toggle_startup()
+        return
+    if action == "exit" and _runtime.hwnd:
+        u32.PostMessageW(_runtime.hwnd, WM_CLOSE, 0, 0)
+
+
 def _show_menu(hwnd: HWND) -> None:
     if _runtime is None:
         return
     from startup import is_startup_enabled
 
     menu = u32.CreatePopupMenu()
+    command_map: dict[int, str] = {}
     try:
-        u32.AppendMenuW(menu, MF_STRING, 2, "Refresh now")
-        startup_flags = MF_STRING | (MF_CHECKED if is_startup_enabled() else 0)
-        u32.AppendMenuW(menu, startup_flags, 3, "Start with Windows")
+        for menu_id, (action, label) in enumerate(FLYOUT_ACTIONS, start=2):
+            flags = MF_STRING
+            if action == "startup" and is_startup_enabled():
+                flags |= MF_CHECKED
+            u32.AppendMenuW(menu, flags, menu_id, label)
+            command_map[menu_id] = action
         u32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
         for detail in context_detail_lines(_runtime.view):
             u32.AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, detail[:160])
-        u32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
-        u32.AppendMenuW(menu, MF_STRING, 9, "Exit")
         point = wintypes.POINT()
         u32.GetCursorPos(ctypes.byref(point))
         u32.SetForegroundWindow(hwnd)
         command = u32.TrackPopupMenu(menu, TPM_RETURNCMD, point.x, point.y, 0, hwnd, None)
     finally:
         u32.DestroyMenu(menu)
-    if command == 2:
-        _runtime.on_refresh()
-    elif command == 3:
-        _toggle_startup()
-    elif command == 9:
-        u32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+    _run_command(command_map.get(int(command or 0), ""))
 
 
 def _handle_to_int(handle: Any) -> int:
@@ -1289,57 +1343,114 @@ class FlyoutLine:
     is_header: bool = False
     is_highlighted: bool = False
     extra_gap_before: int = 0
+    action: str = ""
+
+
+def _startup_state() -> bool:
+    """Current HKCU startup flag, read when the dashboard is drawn."""
+    try:
+        from startup import is_startup_enabled
+
+        return bool(is_startup_enabled())
+    except Exception:
+        return False
+
+
+def _flyout_action_lines(startup_enabled: bool) -> tuple[FlyoutLine, ...]:
+    """The right-click commands, reachable directly inside the dashboard."""
+    lines = [FlyoutLine("Actions", rgb((150, 156, 170)), is_bold=True, extra_gap_before=12)]
+    for action, label in FLYOUT_ACTIONS:
+        text = f"Start with Windows: {'On' if startup_enabled else 'Off'}" if action == "startup" else label
+        lines.append(FlyoutLine(text, rgb((201, 206, 218)), action=action, extra_gap_before=2))
+    return tuple(lines)
 
 
 def _build_flyout_lines(
     view: TrackerView,
     provider_styles: dict[str, dict[str, Any]],
+    startup_enabled: Optional[bool] = None,
 ) -> tuple[FlyoutLine, ...]:
     # Keep the hierarchy close to Windows 11 shell flyouts: a strong row label
     # followed by quieter detail rows, without decorative bullets.
+    visible = tuple(
+        provider for provider in view.providers if provider.provider_id not in HIDDEN_PROVIDER_IDS
+    )
     lines: list[FlyoutLine] = []
-    if not view.providers:
-        return (
-            FlyoutLine("Q-Tracker", rgb((238, 240, 244)), is_header=True),
-            FlyoutLine(
-                "Waiting for provider quota data...",
-                rgb((166, 170, 180)),
-                extra_gap_before=4,
-            ),
-        )
-
-    for idx, provider in enumerate(view.providers):
-        style = provider_styles.get(provider.provider_id, {})
-        color = rgb(style.get("color", "#E8EAF0"))
-        name = str(style.get("display_name") or provider.display_name or provider.provider_id.title())
-        status_suffix = ""
-        if provider.status == "stale":
-            status_suffix = " (stale)"
-        elif provider.status not in ("ok", ""):
-            status_suffix = f" ({provider.status})"
-        lines.append(
-            FlyoutLine(
-                f"{name}{status_suffix}",
-                color,
-                is_bold=True,
-                extra_gap_before=10 if idx > 0 else 0,
+    if not visible:
+        lines.extend(
+            (
+                FlyoutLine("Q-Tracker", rgb((238, 240, 244)), is_header=True),
+                FlyoutLine(
+                    "Waiting for provider quota data...",
+                    rgb((166, 170, 180)),
+                    extra_gap_before=4,
+                ),
             )
         )
-        if not provider.windows:
-            lines.append(FlyoutLine("No active quota windows", rgb((166, 170, 180))))
-        else:
-            for window in provider.windows:
-                detail = _format_window_reset_detail(window)
-                imminent = is_reset_imminent(window.reset_in)
-                lines.append(
-                    FlyoutLine(
-                        f"{window.label}: {window.remaining_percent:.0f}% left · {detail}",
-                        rgb((255, 220, 145) if imminent else (216, 219, 226)),
-                        is_bold=imminent,
-                        is_highlighted=imminent,
-                    )
+    else:
+        for idx, provider in enumerate(visible):
+            style = provider_styles.get(provider.provider_id, {})
+            color = rgb(style.get("color", "#E8EAF0"))
+            name = str(style.get("display_name") or provider.display_name or provider.provider_id.title())
+            status_suffix = ""
+            if provider.status == "stale":
+                status_suffix = " (stale)"
+            elif provider.status not in ("ok", ""):
+                status_suffix = f" ({provider.status})"
+            lines.append(
+                FlyoutLine(
+                    f"{name}{status_suffix}",
+                    color,
+                    is_bold=True,
+                    extra_gap_before=10 if idx > 0 else 0,
                 )
+            )
+            billing_lines = openai_billing_lines(provider)
+            if provider.windows:
+                for window in provider.windows:
+                    detail = _format_window_reset_detail(window)
+                    imminent = is_reset_imminent(window.reset_in)
+                    lines.append(
+                        FlyoutLine(
+                            f"{window.label}: {window.remaining_percent:.0f}% left · {detail}",
+                            rgb((255, 220, 145) if imminent else (216, 219, 226)),
+                            is_bold=imminent,
+                            is_highlighted=imminent,
+                        )
+                    )
+            elif not billing_lines:
+                lines.append(FlyoutLine("No active quota windows", rgb((166, 170, 180))))
+            for detail in billing_lines:
+                lines.append(FlyoutLine(detail, rgb((216, 219, 226))))
+    lines.extend(
+        _flyout_action_lines(_startup_state() if startup_enabled is None else startup_enabled)
+    )
     return tuple(lines)
+
+
+def _flyout_line_height(line: FlyoutLine) -> int:
+    if line.action:
+        return FLYOUT_ACTION_HEIGHT
+    if line.is_header:
+        return 30
+    if line.is_bold:
+        return 28
+    return 26
+
+
+def _flyout_layout(
+    lines: tuple[FlyoutLine, ...],
+    width: int,
+) -> tuple[tuple[int, int, int, int, FlyoutLine], ...]:
+    """Row rectangles shared by the painter and the click hit-test."""
+    rows = []
+    y = 16
+    for index, line in enumerate(lines):
+        y += line.extra_gap_before
+        height = _flyout_line_height(line)
+        rows.append((22, y, max(22, width - 22), y + height, line))
+        y += height
+    return tuple(rows)
 
 
 def _measure_flyout_size(lines: tuple[FlyoutLine, ...]) -> tuple[int, int]:
@@ -1354,7 +1465,7 @@ def _measure_flyout_size(lines: tuple[FlyoutLine, ...]) -> tuple[int, int]:
         total_h = 32
         for line in lines:
             font = title_font if line.is_header else bold_font if line.is_bold else normal_font
-            line_height = 30 if line.is_header else 28 if line.is_bold else 26
+            line_height = _flyout_line_height(line)
             old_font = g32.SelectObject(hdc, font)
             size = wintypes.SIZE()
             g32.GetTextExtentPoint32W(hdc, line.text, len(line.text), ctypes.byref(size))
@@ -1412,24 +1523,59 @@ def _paint_flyout(hwnd: HWND) -> None:
     normal_font = _font_cache.get("Segoe UI Variable Text", 16, FW_NORMAL)
 
     lines = _build_flyout_lines(_runtime.view, getattr(_runtime.settings, "provider_styles", {}))
+    rows = _flyout_layout(lines, width)
+    hits: list[tuple[int, int, int, int, str]] = []
 
-    y = 16
-    for line in lines:
-        y += line.extra_gap_before
+    for left, top, right, bottom, line in rows:
+        row_rect = wintypes.RECT(left, top, right, bottom)
+        if line.action:
+            hovered = getattr(_runtime, "flyout_hover", "") == line.action
+            chip = wintypes.RECT(
+                left - FLYOUT_ACTION_INSET + 8,
+                top + 2,
+                right + FLYOUT_ACTION_INSET - 8,
+                bottom - 2,
+            )
+            brush = g32.CreateSolidBrush(rgb((52, 54, 62) if hovered else (40, 42, 49)))
+            pen = g32.CreatePen(0, 1, rgb((96, 99, 110) if hovered else (66, 68, 76)))
+            old_brush = g32.SelectObject(memory_dc, brush)
+            old_pen = g32.SelectObject(memory_dc, pen)
+            g32.RoundRect(memory_dc, chip.left, chip.top, chip.right, chip.bottom, 8, 8)
+            g32.SelectObject(memory_dc, old_brush)
+            g32.SelectObject(memory_dc, old_pen)
+            g32.DeleteObject(brush)
+            g32.DeleteObject(pen)
+            hits.append((chip.left, top, chip.right, bottom, line.action))
         font = title_font if line.is_header else bold_font if line.is_bold else normal_font
-        line_height = 30 if line.is_header else 28 if line.is_bold else 26
         old_font = g32.SelectObject(memory_dc, font)
         g32.SetTextColor(memory_dc, line.color)
-        r = wintypes.RECT(22, y, width - 22, y + line_height)
-        u32.DrawTextW(memory_dc, line.text, -1, ctypes.byref(r), DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX)
+        u32.DrawTextW(memory_dc, line.text, -1, ctypes.byref(row_rect), DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX)
         g32.SelectObject(memory_dc, old_font)
-        y += line_height
+
+    _runtime.flyout_hits = tuple(hits)
 
     g32.BitBlt(hdc, 0, 0, width, height, memory_dc, 0, 0, 0x00CC0020)
     g32.SelectObject(memory_dc, old_bitmap)
     g32.DeleteObject(bitmap)
     g32.DeleteDC(memory_dc)
     u32.EndPaint(hwnd, ctypes.byref(paint))
+
+
+def _flyout_point(lparam: int) -> tuple[int, int]:
+    """Client coordinates packed into an LPARAM."""
+    return (
+        ctypes.c_short(lparam & 0xFFFF).value,
+        ctypes.c_short((lparam >> 16) & 0xFFFF).value,
+    )
+
+
+def _flyout_action_at(x: int, y: int) -> str:
+    if _runtime is None:
+        return ""
+    for left, top, right, bottom, action in getattr(_runtime, "flyout_hits", ()):
+        if left <= x <= right and top <= y <= bottom:
+            return action
+    return ""
 
 
 def _flyout_wnd_proc(hwnd: HWND, message: int, wparam: int, lparam: int) -> int:
@@ -1439,6 +1585,24 @@ def _flyout_wnd_proc(hwnd: HWND, message: int, wparam: int, lparam: int) -> int:
             return 0
         if message == WM_ERASEBKGND:
             return 1
+        if message == WM_MOUSEMOVE:
+            if _runtime is not None:
+                action = _flyout_action_at(*_flyout_point(lparam))
+                if action != getattr(_runtime, "flyout_hover", ""):
+                    _runtime.flyout_hover = action
+                    u32.InvalidateRect(hwnd, None, 0)
+            return 0
+        if message == WM_SETCURSOR:
+            if _runtime is not None and getattr(_runtime, "flyout_hover", ""):
+                load_cursor = getattr(u32, "LoadCursorW", None)
+                set_cursor = getattr(u32, "SetCursor", None)
+                if load_cursor is not None and set_cursor is not None:
+                    set_cursor(load_cursor(None, IDC_HAND))
+                    return 1
+            return 0
+        if message == WM_LBUTTONUP:
+            _run_command(_flyout_action_at(*_flyout_point(lparam)))
+            return 0
     except Exception:
         pass
     return u32.DefWindowProcW(hwnd, message, wparam, lparam)
@@ -1576,7 +1740,6 @@ def _init_tooltip(hwnd: HWND) -> None:
             | WS_EX_TOOLWINDOW
             | WS_EX_NOACTIVATE
             | WS_EX_LAYERED
-            | WS_EX_TRANSPARENT
         )
         popup_hwnd = u32.CreateWindowExW(
             ex_style,
@@ -1661,6 +1824,7 @@ def _show_flyout(hwnd: HWND, widget_rect: wintypes.RECT) -> None:
     if update is not None:
         update(popup_hwnd)
     _runtime.tooltip_active = True
+    _runtime.flyout_hover = ""
 
 
 def _hide_flyout() -> None:
@@ -1672,6 +1836,8 @@ def _hide_flyout() -> None:
     if getattr(_runtime, "tooltip_active", False):
         u32.ShowWindow(popup_hwnd, SW_HIDE)
         _runtime.tooltip_active = False
+        _runtime.flyout_hover = ""
+        _runtime.flyout_hits = ()
 
 
 def _update_tooltip() -> None:

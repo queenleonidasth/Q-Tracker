@@ -122,6 +122,7 @@ class ProviderSnapshot:
     refreshed_at: str = ""
     message: str = ""
     error_kind: str = ""
+    billing: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, FetchStatus):
@@ -157,6 +158,7 @@ class ProviderSnapshot:
             "plan": self.plan_type,
             "message": self.message,
             "error_kind": self.error_kind or None,
+            "billing": self.billing,
             "windows": {key: value.to_dict() for key, value in self.windows.items()},
         }
 
@@ -182,6 +184,7 @@ class ProviderSnapshot:
             plan_type=str(data.get("plan") or data.get("plan_type") or "unknown"),
             message=str(data.get("message") or data.get("error_message") or ""),
             error_kind=str(data.get("error_kind") or ""),
+            billing=data.get("billing") if isinstance(data.get("billing"), dict) else {},
         )
 
     @classmethod
